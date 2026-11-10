@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b1a33">
+<title>Ninni Game</title>
+<style>
+  html, body {
+    margin: 0; height: 100%; background: #0b1a33; overflow: hidden;
+    overscroll-behavior: none; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   NINNI GAME — gioco d'acqua con anelli
+   Coordinate logiche: 1000 x 470 (orizzontale). In verticale il
+   gioco viene ruotato di 90° dentro il canvas.
+   ============================================================ */
+
+const W = 1000, H = 470;
+const CELL = 11, N = 60, M = 36;                      // griglia del fluido
+const TANK = { x: 170, y: 37, w: N * CELL, h: M * CELL };
+const TB = TANK.y + TANK.h;                           // fondo vasca
+const R = 15;                                         // raggio anello
+const G = 260;                                        // "peso" in acqua (px/s^2)
+const DRAG = 4.5;                                     // quanto l'acqua trascina gli anelli
+const JET = 170;                                       // velocità getto (celle/s)
+const DT = 1 / 60;
+const SLOSH = 160;                                     // quanto gli scossoni muovono l'acqua
+const FUNNEL = 7;                                       // aiuto a centrare l'anello sulla punta
+const PUMP_STROKE = 0.9;                                // secondi di getto a piena forza
+const PUMP_REFILL = 0.45;                               // secondi per ricaricare la pompa
+
+/* ---------------- Livelli ---------------- */
+const LEVELS = [
+  {
+    name: 'Livello 1',
+    rings: 18,
+    colors: ['#ff8fc7', '#ffe14d', '#8fd0ff', '#c9a2ff'],
+    pegs: [                       // x in frazione della vasca, y in frazione dell'altezza
+      { x: 0.36, tip: 0.40, base: 0.74 },
+      { x: 0.66, tip: 0.30, base: 0.74 },
+    ],
+    nozzles: [
+      { x: 0.14, dx: 0.5 },      // sinistra, leggermente verso il centro
+      { x: 0.86, dx: -0.5 },     // destra
+    ],
+    stars: [90, 180],             // secondi per 3 e 2 stelle
+  },
+];
+
+/* ---------------- Stato ---------------- */
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let view = { s: 1, ox: 0, oy: 0, rot: false, vw: 1, vh: 1, dpr: 1, flip: false };
+
+let level, pegs, nozzles, rings, bubbles;
+let state = 'start';              // start | play | win
+let time = 0, timing = false, winHold = 0, winAnim = 0;
+let soundOn = true;
+// Movimento del telefono: accX/accY = "gravità efficace" (gravità meno accelerazione del telefono)
+// in coordinate di gioco, in unità di g. Senza sensori resta (0, 1) = verso il basso.
+let tiltOn = true, haveSensor = false, accX = 0, accY = 1;
+let sloshX = 0, sloshY = 0, swirl = 0;      // spinte da applicare all'acqua al prossimo passo
+const fishes = [];                          // pesciolini vivi: nuotano e urtano gli anelli
+const specks = [];                          // pulviscolo che rende visibile il moto dell'acqua
+let best = null;
+const pumps = [mkPump(85), mkPump(915)];
+// burst = portata attuale del getto (0..1), charge = riserva della pompa, force = quanto forte si preme
+function mkPump(cx) { return { cx, cy: 245, r: 54, down: false, press: 0, charge: 1, burst: 0, ids: new Set(), hold: 0, minT: 0, sense: null, force: 0 }; }
+
+const BTN_SOUND = { x: 52, y: 424, r: 24 };
+const BTN_TILT = { x: 118, y: 424, r: 24 };
+const BTN_RESET = { x: 915, y: 424, r: 24 };
+
+/* ---------------- Fluido (stable fluids) ---------------- */
+const SZ = (N + 2) * (M + 2);
+let u = new Float32Array(SZ), v = new Float32Array(SZ);
+let u0 = new Float32Array(SZ), v0 = new Float32Array(SZ);
+const pr = new Float32Array(SZ), dv = new Float32Array(SZ);
+const IX = (i, j) => i + (N + 2) * j;
+
+function setBnd(b, x) {
+  for (let i = 1; i <= N; i++) {
+    x[IX(i, 0)] = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
+    x[IX(i, M + 1)] = b === 2 ? -x[IX(i, M)] : x[IX(i, M)];
+  }
+  for (let j = 1; j <= M; j++) {
+    x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)];
+    x[IX(N + 1, j)] = b === 1 ? -x[IX(N, j)] : x[IX(N, j)];
+  }
+  x[IX(0, 0)] = 0.5 * (x[IX(1, 0)] + x[IX(0, 1)]);
+  x[IX(0, M + 1)] = 0.5 * (x[IX(1, M + 1)] + x[IX(0, M)]);
+  x[IX(N + 1, 0)] = 0.5 * (x[IX(N, 0)] + x[IX(N + 1, 1)]);
+  x[IX(N + 1, M + 1)] = 0.5 * (x[IX(N, M + 1)] + x[IX(N + 1, M)]);
+}
+
+function project(a, b) {
+  const w = N + 2;
+  for (let j = 1; j <= M; j++) for (let i = 1; i <= N; i++) {
+    const k = i + w * j;
+    dv[k] = -0.5 * (a[k + 1] - a[k - 1] + b[k + w] - b[k - w]);
+    pr[k] = 0;
+  }
+  setBnd(0, dv); setBnd(0, pr);
+  for (let it = 0; it < 14; it++) {
+    for (let j = 1; j <= M; j++) for (let i = 1; i <= N; i++) {
+      const k = i + w * j;
+      pr[k] = (dv[k] + pr[k - 1] + pr[k + 1] + pr[k - w] + pr[k + w]) * 0.25;
+    }
+    setBnd(0, pr);
+  }
+  for (let j = 1; j <= M; j++) for (let i = 1; i <= N; i++) {
+    const k = i + w * j;
+    a[k] -= 0.5 * (pr[k + 1] - pr[k - 1]);
+    b[k] -= 0.5 * (pr[k + w] - pr[k - w]);
+  }
+  setBnd(1, a); setBnd(2, b);
+}
+
+function advect(b, d, d0, a, c) {
+  for (let j = 1; j <= M; j++) for (let i = 1; i <= N; i++) {
+    const k = IX(i, j);
+    let x = i - DT * a[k], y = j - DT * c[k];
+    if (x < 0.5) x = 0.5; else if (x > N + 0.5) x = N + 0.5;
+    if (y < 0.5) y = 0.5; else if (y > M + 0.5) y = M + 0.5;
+    const i0 = x | 0, j0 = y | 0, s1 = x - i0, t1 = y - j0;
+    d[k] = (1 - s1) * ((1 - t1) * d0[IX(i0, j0)] + t1 * d0[IX(i0, j0 + 1)]) +
+           s1 * ((1 - t1) * d0[IX(i0 + 1, j0)] + t1 * d0[IX(i0 + 1, j0 + 1)]);
+  }
+  setBnd(b, d);
+}
+
+function fluidStep() {
+  // getti
+  for (let n = 0; n < nozzles.length; n++) {
+    const p = pumps[n], nz = nozzles[n];
+    if (p.burst < 0.02) continue;
+    const ci = nz.gi, cj = M - 1;
+    for (let j = cj - 3; j <= M; j++) for (let i = ci - 2; i <= ci + 2; i++) {
+      if (i < 1 || i > N) continue;
+      const d2 = (i - ci) * (i - ci) + (j - cj) * (j - cj) * 0.5;
+      const wgt = Math.exp(-d2 / 3) * 0.6;
+      const k = IX(i, j);
+      u[k] += (nz.dx * JET * p.burst - u[k]) * wgt;
+      v[k] += (-JET * p.burst - v[k]) * wgt;
+    }
+  }
+  if (sloshX || sloshY || swirl) {
+    const ci = (N + 1) / 2, cj = (M + 1) / 2;
+    for (let j = 1; j <= M; j++) for (let i = 1; i <= N; i++) {
+      const k = IX(i, j);
+      u[k] += sloshX - swirl * (j - cj);
+      v[k] += sloshY + swirl * (i - ci);
+    }
+    sloshX = sloshY = swirl = 0;
+  }
+  project(u, v);
+  u0.set(u); v0.set(v);
+  advect(1, u, u0, u0, v0);
+  advect(2, v, v0, u0, v0);
+  project(u, v);
+  for (let k = 0; k < SZ; k++) { u[k] *= 0.992; v[k] *= 0.992; }
+}
+
+let fx = 0, fy = 0;
+function sample(x, y) {             // velocità dell'acqua in px/s
+  let gx = (x - TANK.x) / CELL + 0.5, gy = (y - TANK.y) / CELL + 0.5;
+  if (gx < 0.5) gx = 0.5; else if (gx > N + 0.5) gx = N + 0.5;
+  if (gy < 0.5) gy = 0.5; else if (gy > M + 0.5) gy = M + 0.5;
+  const i0 = gx | 0, j0 = gy | 0, s1 = gx - i0, t1 = gy - j0;
+  const a = IX(i0, j0), b = IX(i0 + 1, j0), c = IX(i0, j0 + 1), d = IX(i0 + 1, j0 + 1);
+  fx = ((1 - s1) * ((1 - t1) * u[a] + t1 * u[c]) + s1 * ((1 - t1) * u[b] + t1 * u[d])) * CELL;
+  fy = ((1 - s1) * ((1 - t1) * v[a] + t1 * v[c]) + s1 * ((1 - t1) * v[b] + t1 * v[d])) * CELL;
+}
+
+/* ---------------- Fondo sabbioso (fa scivolare gli anelli verso i getti) ---------------- */
+function floorY(x) {
+  let d = Infinity;
+  for (const nz of nozzles) d = Math.min(d, Math.abs(x - nz.px));
+  const t = Math.min(1, d / 190);
+  return TB - 4 - 24 * t * t * (3 - 2 * t);
+}
+
+/* ---------------- Setup livello ---------------- */
+function loadLevel(idx) {
+  level = LEVELS[idx];
+  pegs = level.pegs.map(p => ({
+    x: TANK.x + p.x * TANK.w, tipY: TANK.y + p.tip * TANK.h, baseY: TANK.y + p.base * TANK.h, count: 0,
+  }));
+  nozzles = level.nozzles.map(n => {
+    const gi = Math.round(n.x * N);
+    return { gi, px: TANK.x + (gi - 0.5) * CELL, dx: n.dx };
+  });
+  u.fill(0); v.fill(0);
+  rings = [];
+  for (let i = 0; i < level.rings; i++) {
+    const x = TANK.x + 40 + Math.random() * (TANK.w - 80);
+    rings.push({
+      x, y: floorY(x) - R - Math.random() * 60, vx: 0, vy: 0, px: x, py: 0,
+      rot: Math.random() * 6.28, spin: (Math.random() - 0.5) * 2, phase: Math.random() * 6.28,
+      color: level.colors[i % level.colors.length], peg: -1, z: i & 1, pop: 0,
+    });
+  }
+  bubbles = [];
+  fishes.length = 0;
+  const FC = ['#ffb347', '#ff7a8a', '#ffe680', '#7df0c8', '#ff9ad5'];
+  for (let i = 0; i < 5; i++) {
+    const dir = i % 2 ? -1 : 1, size = 0.75 + Math.random() * 0.5;
+    fishes.push({
+      x: TANK.x + 60 + Math.random() * (TANK.w - 120), y: TANK.y + 50 + i * 55 + Math.random() * 20,
+      vx: dir * 30, vy: 0, dir, face: dir, size, color: FC[i], speed: 26 + Math.random() * 22,
+      homeY: TANK.y + 50 + i * 55, wag: Math.random() * 6, scare: 0, hit: 0, turnT: 3 + Math.random() * 6,
+    });
+  }
+  specks.length = 0;
+  for (let i = 0; i < 46; i++) specks.push({ x: TANK.x + Math.random() * TANK.w, y: TANK.y + Math.random() * TANK.h, w: 4 + Math.random() * 10, r: 0.8 + Math.random() * 1.2 });
+  time = 0; timing = false; winHold = 0; winAnim = 0;
+  for (const p of pumps) { p.burst = 0; p.charge = 1; p.minT = 0; }
+  try { best = JSON.parse(localStorage.getItem('ninni_best_' + idx)); } catch (e) { best = null; }
+  drawBackdrop();
+}
+
+/* ---------------- Fisica anelli ---------------- */
+function physicsStep() {
+  for (const p of pumps) {
+    let target = 0;
+    if (p.down || p.minT > 0) {          // un tocco breve dà comunque uno sbuffo minimo
+      p.minT -= DT;
+      p.hold += DT;
+      // forza: sensore di pressione/area del dito se c'è, altrimenti cresce tenendo premuto
+      const ramp = 0.42 + 0.38 * Math.min(1, p.hold / 0.45);
+      p.force = p.sense === null ? Math.min(1, ramp + 0.2 * Math.min(1, p.hold / 0.9)) : Math.max(ramp, 0.25 + 0.75 * p.sense);
+      if (state === 'play' && p.charge > 0) {
+        target = p.force;
+        p.charge = Math.max(0, p.charge - DT * (0.35 + 0.75 * p.force) / PUMP_STROKE);
+      }
+    } else {
+      p.force = 0;
+      p.charge = Math.min(1, p.charge + DT / PUMP_REFILL);
+    }
+    p.press += ((p.down ? 0.35 + 0.65 * p.force : 0) - p.press) * 0.4;
+    p.burst += (target - p.burst) * (target > p.burst ? 0.3 : 0.12);
+  }
+  fluidStep();
+
+  // bolle
+  for (let n = 0; n < nozzles.length; n++) {
+    const b = pumps[n].burst;
+    if (b > 0.12 && bubbles.length < 160) {
+      for (let k = 0; k < 1 + b * 2; k++) bubbles.push({
+        x: nozzles[n].px + (Math.random() - 0.5) * 22, y: TB - 8 - Math.random() * 14,
+        r: 1.5 + Math.random() * 3.5, life: 1 + Math.random() * 1.6,
+      });
+    }
+  }
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    sample(b.x, b.y);
+    b.x += (fx + Math.sin(b.life * 9 + i) * 14) * DT;
+    b.y += (fy - 45 - b.r * 8) * DT;
+    b.life -= DT;
+    if (b.life <= 0 || b.y < TANK.y + 4) bubbles.splice(i, 1);
+  }
+
+  for (const sp of specks) {
+    sample(sp.x, sp.y);
+    sp.x += fx * DT + accX * sp.w * DT; sp.y += fy * DT + accY * sp.w * DT;
+    if (sp.x < TANK.x + 3) sp.x = TANK.x + 3; else if (sp.x > TANK.x + TANK.w - 3) sp.x = TANK.x + TANK.w - 3;
+    if (sp.y < TANK.y + 3) sp.y = TANK.y + 3;
+    else if (sp.y > TB - 6) { sp.y = TB - 6; if (Math.random() < 0.004) sp.y = TANK.y + 10 + Math.random() * 60; }
+  }
+  updateMotion();
+  updateFishes();
+
+  const L = TANK.x + R, Rr = TANK.x + TANK.w - R, T = TANK.y + R;
+  for (const r of rings) {
+    sample(r.x, r.y);
+    r.px = r.x; r.py = r.y;
+    if (r.pop > 0) r.pop -= DT * 3;
+    if (r.peg >= 0) {
+      const p = pegs[r.peg];
+      r.vy += (fy - r.vy) * DRAG * 0.55 * DT + G * accY * DT;
+      r.y += r.vy * DT;
+      r.x += (p.x - r.x) * 0.3; r.vx = 0;
+      if (r.y < p.tipY - 3) {           // un getto forte può sfilarlo!
+        r.peg = -1; r.vx = fx * 0.5; r.z = 1;
+      }
+      continue;
+    }
+    r.vx += (fx - r.vx) * DRAG * DT + G * accX * DT;
+    r.vy += (fy - r.vy) * DRAG * DT + G * accY * DT;
+    r.x += r.vx * DT; r.y += r.vy * DT;
+    const sp = Math.hypot(r.vx, r.vy);
+    r.phase += (0.4 + sp * 0.02) * DT * (r.spin > 0 ? 1 : -1);
+    r.rot += r.spin * (0.15 + sp * 0.006) * DT;
+
+    if (r.x < L) { r.x = L; r.vx = Math.abs(r.vx) * 0.3; }
+    if (r.x > Rr) { r.x = Rr; r.vx = -Math.abs(r.vx) * 0.3; }
+    if (r.y < T) { r.y = T; r.vy = Math.abs(r.vy) * 0.3; }
+    const fl = floorY(r.x) - R * 0.8;
+    if (r.y > fl) {
+      r.y = fl;
+      if (r.vy > 0) r.vy = 0;
+      const slope = (floorY(r.x + 2) - floorY(r.x - 2)) / 4;
+      r.vx += slope * G * 1.2 * Math.max(0, accY) * DT;
+      r.vx *= 0.97;
+    }
+
+    // infilato? il centro dell'anello scende sopra la punta
+    if (r.vy > 0) {
+      for (let k = 0; k < pegs.length; k++) {
+        const p = pegs[k], cy = p.tipY + 7;
+        // piccolo "imbuto": vicino alla punta l'anello tende a centrarsi
+        if (r.y > cy - 50 && r.y <= cy && Math.abs(r.x - p.x) < 34) r.vx += (p.x - r.x) * FUNNEL * DT;
+        if (r.py <= cy && r.y > cy && Math.abs(r.x - p.x) < 14) {
+          r.peg = k; r.vx = 0; r.vy *= 0.5; r.pop = 1;
+          sfxCatch(p.count);
+          break;
+        }
+      }
+    }
+  }
+
+  // urti morbidi fra anelli liberi
+  const D = R * 1.5;
+  for (let i = 0; i < rings.length; i++) {
+    const a = rings[i]; if (a.peg >= 0) continue;
+    for (let j = i + 1; j < rings.length; j++) {
+      const b = rings[j]; if (b.peg >= 0) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy;
+      if (d2 < D * D && d2 > 0.01) {
+        const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, o = (D - d) * 0.25;
+        a.x -= nx * o; a.y -= ny * o; b.x += nx * o; b.y += ny * o;
+        const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+        if (rv < 0) { const imp = rv * 0.5; a.vx += nx * imp; a.vy += ny * imp; b.vx -= nx * imp; b.vy -= ny * imp; }
+      }
+    }
+  }
+
+  // pile sui pioli
+  let done = 0;
+  for (let k = 0; k < pegs.length; k++) {
+    const p = pegs[k];
+    const st = rings.filter(r => r.peg === k).sort((a, b) => b.y - a.y);
+    p.count = st.length; done += st.length;
+    let lim = p.baseY - 8;
+    for (const r of st) {
+      if (r.y > lim) { r.y = lim; if (r.vy > 0) r.vy = 0; }
+      lim = r.y - 8;
+    }
+  }
+
+  if (state === 'play') {
+    if (timing) time += DT;
+    if (done === rings.length) { winHold += DT; if (winHold > 0.7) win(); } else winHold = 0;
+  }
+  if (state === 'win') winAnim += DT;
+}
+
+/* ---------------- Pesciolini ---------------- */
+function updateFishes() {
+  const L = TANK.x + 26, Rr = TANK.x + TANK.w - 26, T = TANK.y + 22, B = TB - 46;
+  for (const f of fishes) {
+    const rf = 13 * f.size, mass = 2.2 * f.size;
+    // nuoto: velocità di crociera nella direzione scelta, più svelto se spaventato
+    f.turnT -= DT;
+    if (f.turnT <= 0) { f.turnT = 4 + Math.random() * 7; if (Math.random() < 0.5) f.dir = -f.dir; f.homeY = T + 20 + Math.random() * (B - T - 40); }
+    if (f.x < L + 20) f.dir = 1; else if (f.x > Rr - 20) f.dir = -1;
+    const sp = f.speed * (1 + f.scare * 3.5);
+    const steer = f.hit > 0 ? 0.6 : 2.2;                 // appena urtato resta "stordito" e si lascia portare
+    f.vx += (f.dir * sp - f.vx) * steer * DT;
+    f.vy += ((f.homeY - f.y) * 0.6 + Math.sin(f.wag * 0.35) * 8 - f.vy) * steer * DT;
+    // la corrente lo trascina
+    sample(f.x, f.y);
+    f.vx += (fx - f.vx) * 1.6 * DT; f.vy += (fy - f.vy) * 1.6 * DT;
+    f.x += f.vx * DT; f.y += f.vy * DT;
+    if (f.x < L) { f.x = L; f.vx = Math.abs(f.vx) * 0.5; f.dir = 1; }
+    if (f.x > Rr) { f.x = Rr; f.vx = -Math.abs(f.vx) * 0.5; f.dir = -1; }
+    if (f.y < T) { f.y = T; f.vy = Math.abs(f.vy) * 0.5; }
+    if (f.y > B) { f.y = B; f.vy = -Math.abs(f.vy) * 0.5; }
+    const v = Math.hypot(f.vx, f.vy);
+    f.wag += (4 + v * 0.16) * DT;
+    if (Math.abs(f.vx) > 8) f.face += (Math.sign(f.vx) - f.face) * 0.15;
+    if (f.scare > 0) f.scare = Math.max(0, f.scare - DT * 1.1);
+    if (f.hit > 0) f.hit = Math.max(0, f.hit - DT * 2.5);
+
+    // urti con gli anelli
+    for (const r of rings) {
+      const dx = r.x - f.x, dy = r.y - f.y, D = rf + R * 0.85, d2 = dx * dx + dy * dy;
+      if (d2 >= D * D || d2 < 0.01) continue;
+      const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, over = D - d;
+      const fixed = r.peg >= 0;                           // anello sul razzo: non si sposta di lato
+      const rvx = (fixed ? 0 : r.vx) - f.vx, rvy = r.vy - f.vy, rv = rvx * nx + rvy * ny;
+      if (fixed) { f.x -= nx * over; f.y -= ny * over; }
+      else { const k = mass / (mass + 1); r.x += nx * over * k; r.y += ny * over * k; f.x -= nx * over * (1 - k); f.y -= ny * over * (1 - k); }
+      if (rv < 0) {                                       // si stanno venendo incontro: scambio di quantità di moto
+        const e = 0.55, j = -(1 + e) * rv / (fixed ? 1 / mass : 1 / mass + 1);
+        f.vx -= j / mass * nx; f.vy -= j / mass * ny;
+        if (fixed) r.vy += j * ny * 0.6;
+        else { r.vx += j * nx; r.vy += j * ny; r.spin = (Math.random() - 0.5) * 6; }
+        const force = -rv;
+        if (force > 35) {
+          f.hit = 1; f.scare = Math.min(1, 0.4 + force / 300);
+          f.dir = nx > 0 ? -1 : 1;                        // scappa dalla parte opposta
+          f.homeY = Math.max(T + 10, Math.min(B - 10, f.y - ny * 70));
+          f.turnT = 2 + Math.random() * 3;
+          if (bubbles.length < 150) for (let b = 0; b < 3; b++) bubbles.push({ x: f.x + nx * rf, y: f.y + ny * rf, r: 1 + Math.random() * 2, life: 0.5 + Math.random() * 0.6 });
+          sfxBump(force);
+        }
+      }
+    }
+  }
+  // i pesci non si attraversano fra loro
+  for (let i = 0; i < fishes.length; i++) for (let j = i + 1; j < fishes.length; j++) {
+    const a = fishes[i], b = fishes[j], dx = b.x - a.x, dy = b.y - a.y, D = 13 * (a.size + b.size), d2 = dx * dx + dy * dy;
+    if (d2 < D * D && d2 > 0.01) {
+      const d = Math.sqrt(d2), o = (D - d) * 0.5, nx = dx / d, ny = dy / d;
+      a.x -= nx * o; a.y -= ny * o; b.x += nx * o; b.y += ny * o;
+      a.vy -= ny * 20; b.vy += ny * 20;
+    }
+  }
+}
+
+function drawFish(f) {
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  const tilt = Math.max(-0.5, Math.min(0.5, f.vy * 0.006)) + f.hit * Math.sin(f.wag * 6) * 0.25;
+  ctx.scale((f.face >= 0 ? 1 : -1) * Math.max(0.25, Math.abs(f.face)) * f.size, f.size);
+  ctx.rotate(tilt);
+  const sq = 1 + f.hit * 0.18;                            // si schiaccia un attimo all'urto
+  ctx.scale(1 / sq, sq);
+  const w = Math.sin(f.wag) * 5;
+  ctx.fillStyle = f.color;
+  ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(-26, -9 + w); ctx.lineTo(-22, w * 0.6); ctx.lineTo(-26, 9 + w); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, 0, 16, 8.5, 0, 0, 6.3); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-4, -7); ctx.lineTo(2, -14); ctx.lineTo(7, -7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.ellipse(1, 3, 10, 3.5, 0, 0, 6.3); ctx.fill();
+  const eye = 2.6 + f.scare * 1.6;                        // occhio sgranato quando è spaventato
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(8, -2, eye, 0, 6.3); ctx.fill();
+  ctx.fillStyle = '#123'; ctx.beginPath(); ctx.arc(8.7, -2, 1.2, 0, 6.3); ctx.fill();
+  ctx.restore();
+}
+
+function ringsDone() { let n = 0; for (const r of rings) if (r.peg >= 0) n++; return n; }
+
+function starsFor(t) { return t <= level.stars[0] ? 3 : t <= level.stars[1] ? 2 : 1; }
+
+function win() {
+  state = 'win'; timing = false; winAnim = 0;
+  if (best === null || time < best) {
+    best = time;
+    try { localStorage.setItem('ninni_best_0', JSON.stringify(best)); } catch (e) {}
+  }
+  sfxWin();
+}
+
+/* ---------------- Input ---------------- */
+function toLogical(e) {
+  const sx = e.clientX, sy = e.clientY;
+  if (view.rot && view.flip) return { x: (view.vh - view.ox - sy) / view.s, y: (sx - view.oy) / view.s };
+  if (view.rot) return { x: (sy - view.ox) / view.s, y: (view.vw - view.oy - sx) / view.s };
+  return { x: (sx - view.ox) / view.s, y: (sy - view.oy) / view.s };
+}
+const hit = (b, p) => Math.hypot(p.x - b.x, p.y - b.y) < b.r + 8;
+
+// Stima della forza del dito (0..1): pressione reale se il telefono la fornisce,
+// altrimenti l'area di contatto (premendo forte il polpastrello si allarga).
+let areaMin = Infinity, areaMax = 0;
+function senseOf(e) {
+  if (!e || e.pointerType === 'mouse') return null;
+  const pr = e.pressure;
+  if (pr > 0 && pr !== 0.5 && pr !== 1) return Math.min(1, pr * 1.5);
+  const a = Math.max(e.width || 0, e.height || 0);
+  if (a > 1.5) {
+    areaMin = Math.min(areaMin, a); areaMax = Math.max(areaMax, a);
+    if (areaMax - areaMin > 8) return Math.min(1, (a - areaMin) / (areaMax - areaMin));
+  }
+  return null;
+}
+function pumpDown(i, id, e) {
+  const p = pumps[i];
+  p.ids.add(id);
+  p.sense = senseOf(e);
+  if (p.down) return;
+  p.down = true; p.hold = 0; p.minT = 0.17;
+  if (state !== 'play') return;
+  timing = true;
+  sfxPump(0.4 + 0.6 * p.charge);
+}
+function pumpMove(id, e) {
+  for (const p of pumps) if (p.ids.has(id)) { const sn = senseOf(e); if (sn !== null) p.sense = p.sense === null ? sn : Math.max(sn, p.sense * 0.9); }
+}
+function pumpUp(id) {
+  for (const p of pumps) if (p.ids.delete(id) && p.ids.size === 0) p.down = false;
+}
+
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  initAudio();
+  const p = toLogical(e);
+  startSensors();
+  if (state === 'start') { state = 'play'; goFullscreen(); return; }
+  if (state === 'win') { if (winAnim > 0.8) { loadLevel(0); state = 'play'; } return; }
+  if (hit(BTN_SOUND, p)) { soundOn = !soundOn; return; }
+  if (hit(BTN_TILT, p)) { toggleTilt(); return; }
+  if (hit(BTN_RESET, p)) { loadLevel(0); return; }
+  pumpDown(p.x < W / 2 ? 0 : 1, e.pointerId, e);
+}, { passive: false });
+cv.addEventListener('pointermove', e => pumpMove(e.pointerId, e));
+for (const ev of ['pointerup', 'pointercancel'])
+  cv.addEventListener(ev, e => pumpUp(e.pointerId));
+cv.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+const KEYS = { ArrowLeft: 0, a: 0, A: 0, ArrowRight: 1, l: 1, L: 1, d: 1, D: 1 };
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  initAudio();
+  if (state === 'start') { state = 'play'; return; }
+  if (state === 'win') { if (winAnim > 0.8) { loadLevel(0); state = 'play'; } return; }
+  if (e.key in KEYS) pumpDown(KEYS[e.key], 'k' + e.key);
+  if (e.key === 'r' || e.key === 'R') loadLevel(0);
+});
+addEventListener('keyup', e => { if (e.key in KEYS) pumpUp('k' + e.key); });
+
+function goFullscreen() {
+  try {
+    const el = document.documentElement;
+    const p = el.requestFullscreen ? el.requestFullscreen() : null;
+    if (p && p.then) p.then(() => {
+      try { screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
+    }).catch(() => {});
+  } catch (e) {}
+}
+
+/* ---------------- Movimento del telefono ---------------- */
+// Tutto in coordinate "schermo verticale" (x a destra, y in basso), in unità di g.
+let oriX = 0, oriY = 0, oriOk = false;        // gravità dall'orientamento (segno affidabile ovunque)
+let rawX = 0, rawY = 0, rawOk = false, mSign = 1;   // gravità efficace dall'accelerometro (include gli scossoni)
+let gSmX = 0, gSmY = 1, lastAng = null, lastOmega = 0, flipT = 0;
+
+function onOrient(e) {
+  if (e.beta == null || e.gamma == null) return;
+  const b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+  oriX = Math.cos(b) * Math.sin(g); oriY = Math.sin(b); oriOk = true; haveSensor = true;
+}
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  let mx = -a.x / 9.81, my = a.y / 9.81;
+  // iOS e Android usano segni opposti: lo si capisce confrontando con l'orientamento
+  if (oriOk) { const d = mx * oriX + my * oriY; if (d < -0.25) mSign = -1; else if (d > 0.25) mSign = 1; }
+  rawX = mx * mSign; rawY = my * mSign; rawOk = true; haveSensor = true;
+}
+function toGame(px, py) {                     // da schermo verticale a coordinate di gioco
+  if (view.rot) return view.flip ? [-py, px] : [py, -px];
+  let ang = 0;
+  try { ang = (screen.orientation && screen.orientation.angle) || window.orientation || 0; } catch (err) {}
+  if (ang === 90) return [py, -px];
+  if (ang === 270 || ang === -90) return [-py, px];
+  if (ang === 180) return [-px, -py];
+  return [px, py];
+}
+function updateMotion() {
+  if (!tiltOn || !haveSensor) { accX += (0 - accX) * 0.1; accY += (1 - accY) * 0.1; return; }
+  let [gx, gy] = rawOk ? toGame(rawX, rawY) : toGame(oriX, oriY);
+  const mag = Math.hypot(gx, gy);
+  if (mag > 3) { gx *= 3 / mag; gy *= 3 / mag; }
+  // gravità "lenta" (senza scossoni) per capire inclinazione e rotazione
+  gSmX += (gx - gSmX) * 0.12; gSmY += (gy - gSmY) * 0.12;
+  const sm = Math.hypot(gSmX, gSmY);
+  // telefono appoggiato in piano: resta un po' di peso verso il basso, altrimenti gli anelli non scendono mai
+  const flat = Math.max(0, 1 - sm) * 0.6;
+  accX += (gx - accX) * 0.5; accY += (gy + flat - accY) * 0.5;
+  // scossoni -> l'acqua sciaborda
+  const hx = gx - gSmX, hy = gy - gSmY;
+  if (Math.abs(hx) + Math.abs(hy) > 0.08) { sloshX += hx * SLOSH * DT; sloshY += hy * SLOSH * DT; }
+  // rotazione del telefono (tipo volante) -> l'acqua resta indietro e fa un vortice
+  if (sm > 0.35) {
+    const ang = Math.atan2(gSmY, gSmX);
+    if (lastAng !== null) {
+      let d = ang - lastAng; if (d > Math.PI) d -= 2 * Math.PI; else if (d < -Math.PI) d += 2 * Math.PI;
+      const omega = Math.max(-8, Math.min(8, d / DT));
+      swirl += (omega - lastOmega) * 0.7; lastOmega = omega;
+    }
+    lastAng = ang;
+  } else { lastAng = null; lastOmega = 0; }
+  // schermo verticale e gioco capovolto: lo raddrizzo
+  if (view.rot && gSmY < -0.55) { flipT += DT; if (flipT > 0.7) { view.flip = !view.flip; flipT = 0; gSmX = -gSmX; gSmY = -gSmY; lastAng = null; } } else flipT = 0;
+}
+let sensorsAsked = false;
+function startSensors() {                     // va chiamata da un tocco (iOS chiede il permesso)
+  if (sensorsAsked) return; sensorsAsked = true;
+  const listen = () => { addEventListener('deviceorientation', onOrient); addEventListener('devicemotion', onMotion); };
+  try {
+    const reqs = [];
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) reqs.push(DeviceOrientationEvent.requestPermission());
+    if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) reqs.push(DeviceMotionEvent.requestPermission());
+    if (reqs.length) Promise.all(reqs).then(listen).catch(() => { sensorsAsked = false; });
+    else listen();
+  } catch (e) {}
+}
+function toggleTilt() {
+  if (!sensorsAsked) { tiltOn = true; startSensors(); return; }
+  tiltOn = !tiltOn;
+}
+
+/* ---------------- Audio ---------------- */
+let ac = null, noiseBuf = null;
+function initAudio() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.4, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { ac = null; }
+}
+function sfxPump(power) {
+  if (!ac || !soundOn) return;
+  const t = ac.currentTime, vol = 0.1 + 0.25 * power;
+  const src = ac.createBufferSource(); src.buffer = noiseBuf;
+  const f = ac.createBiquadFilter(); f.type = 'lowpass';
+  f.frequency.setValueAtTime(1400, t); f.frequency.exponentialRampToValueAtTime(220, t + 0.3);
+  const g = ac.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+  src.connect(f).connect(g).connect(ac.destination); src.start(t); src.stop(t + 0.35);
+  const o = ac.createOscillator(), og = ac.createGain();
+  o.frequency.setValueAtTime(170, t); o.frequency.exponentialRampToValueAtTime(60, t + 0.12);
+  og.gain.setValueAtTime(vol * 0.8, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+  o.connect(og).connect(ac.destination); o.start(t); o.stop(t + 0.15);
+}
+function tone(freq, t, dur, vol) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function sfxCatch(n) {
+  if (!ac || !soundOn) return;
+  const t = ac.currentTime, base = 660 * Math.pow(1.06, Math.min(n, 12));
+  tone(base, t, 0.25, 0.2); tone(base * 1.5, t + 0.07, 0.3, 0.16);
+}
+let lastBump = 0;
+function sfxBump(force) {
+  if (!ac || !soundOn || ac.currentTime - lastBump < 0.08) return;
+  lastBump = ac.currentTime;
+  const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(320, t); o.frequency.exponentialRampToValueAtTime(140, t + 0.09);
+  g.gain.setValueAtTime(Math.min(0.22, 0.05 + force / 1500), t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.12);
+}
+function sfxWin() {
+  if (!ac || !soundOn) return;
+  const t = ac.currentTime;
+  [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, t + i * 0.11, 0.5, 0.2));
+}
+
+/* ---------------- Disegno ---------------- */
+const backdrop = document.createElement('canvas');
+function rr(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+
+function drawBackdrop() {
+  const S = 2, w = TANK.w, h = TANK.h;
+  backdrop.width = w * S; backdrop.height = h * S;
+  const c = backdrop.getContext('2d');
+  c.setTransform(S, 0, 0, S, 0, 0);
+  let g = c.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#8fe3ee'); g.addColorStop(0.35, '#2f9fd6'); g.addColorStop(1, '#0c3c7c');
+  c.fillStyle = g; c.fillRect(0, 0, w, h);
+  // raggi di luce
+  c.save(); c.globalAlpha = 0.1; c.fillStyle = '#fff';
+  for (let i = 0; i < 6; i++) {
+    const x = 40 + i * 115;
+    c.beginPath(); c.moveTo(x, 0); c.lineTo(x + 46, 0); c.lineTo(x - 90, h); c.lineTo(x - 170, h); c.fill();
+  }
+  c.restore();
+  // colline lontane
+  c.fillStyle = 'rgba(8,50,110,0.55)';
+  c.beginPath(); c.moveTo(0, h);
+  for (let x = 0; x <= w; x += 20) c.lineTo(x, h - 70 - 34 * Math.sin(x * 0.011 + 1) - 18 * Math.sin(x * 0.031));
+  c.lineTo(w, h); c.fill();
+  // alghe
+  const weed = (x, hh, col) => {
+    c.strokeStyle = col; c.lineWidth = 7; c.lineCap = 'round';
+    c.beginPath(); c.moveTo(x, h);
+    c.bezierCurveTo(x - 16, h - hh * 0.4, x + 16, h - hh * 0.7, x - 4, h - hh); c.stroke();
+  };
+  weed(30, 90, '#1f9d6b'); weed(48, 60, '#27b97c'); weed(w - 28, 100, '#1f9d6b'); weed(w - 50, 66, '#27b97c');
+  weed(w * 0.5 - 12, 70, '#1f9d6b'); weed(w * 0.5 + 10, 52, '#27b97c');
+  // titolo
+  c.save(); c.translate(w - 22, h - 62); c.textAlign = 'right';
+  c.font = 'italic 900 50px "Arial Black", Impact, system-ui, sans-serif';
+  c.lineJoin = 'round'; c.lineWidth = 8; c.strokeStyle = 'rgba(6,40,90,0.55)'; c.strokeText('NINNI', 0, 0);
+  c.fillStyle = '#fff'; c.fillText('NINNI', 0, 0);
+  c.font = '800 15px system-ui, sans-serif'; c.fillStyle = '#d8f4ff';
+  c.fillText('G I O C O   D’ A C Q U A', -2, 20);
+  c.restore();
+  // sabbia (profilo del fondo)
+  g = c.createLinearGradient(0, h - 40, 0, h);
+  g.addColorStop(0, '#f6dfa0'); g.addColorStop(1, '#d9b56a');
+  c.fillStyle = g; c.beginPath(); c.moveTo(0, h);
+  for (let x = 0; x <= w; x += 4) c.lineTo(x, floorY(TANK.x + x) - TANK.y);
+  c.lineTo(w, h); c.fill();
+  // ugelli
+  for (const nz of nozzles) {
+    const x = nz.px - TANK.x;
+    c.fillStyle = '#39445f'; rr(c, x - 13, h - 12, 26, 12, 4); c.fill();
+    c.fillStyle = '#0d1220'; c.beginPath(); c.ellipse(x, h - 11, 9, 3, 0, 0, 6.3); c.fill();
+  }
+}
+
+function drawPeg(p) {
+  const x = p.x, top = p.tipY, bot = p.baseY;
+  const g = ctx.createLinearGradient(x - 9, 0, x + 9, 0);
+  g.addColorStop(0, '#8a93a6'); g.addColorStop(0.35, '#f4f7fb'); g.addColorStop(1, '#6d7689');
+  // pinne
+  ctx.fillStyle = '#7d8799';
+  ctx.beginPath(); ctx.moveTo(x - 6, bot - 34); ctx.lineTo(x - 22, bot + 4); ctx.lineTo(x - 6, bot - 4); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x + 6, bot - 34); ctx.lineTo(x + 22, bot + 4); ctx.lineTo(x + 6, bot - 4); ctx.fill();
+  // corpo
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(x, top - 4);
+  ctx.quadraticCurveTo(x + 7, top + 16, x + 7, top + 34);
+  ctx.lineTo(x + 7, bot); ctx.lineTo(x - 7, bot); ctx.lineTo(x - 7, top + 34);
+  ctx.quadraticCurveTo(x - 7, top + 16, x, top - 4);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(40,50,70,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = '#ff6b5e'; ctx.fillRect(x - 7, top + 36, 14, 4);
+  ctx.fillStyle = '#39445f'; ctx.fillRect(x - 5, bot, 10, 5);
+}
+
+function ringPath(r, squash, a0, a1, popScale) {
+  ctx.save();
+  ctx.translate(r.x, r.y); ctx.rotate(r.peg >= 0 ? 0 : r.rot); ctx.scale(popScale, squash * popScale);
+  ctx.beginPath(); ctx.arc(0, 0, R - 2.5, a0, a1);
+  ctx.restore();
+}
+function drawRing(r, half) {             // half: 0 intero, 1 metà dietro, 2 metà davanti
+  const sq = r.peg >= 0 ? 0.36 : 0.5 + 0.5 * Math.abs(Math.cos(r.phase));
+  const ps = 1 + Math.max(0, r.pop) * 0.35;
+  const a0 = half === 1 ? Math.PI : 0, a1 = half === 2 ? Math.PI : half === 1 ? Math.PI * 2 : Math.PI * 2;
+  ctx.lineCap = 'butt';
+  ringPath(r, sq, a0, a1, ps);
+  ctx.strokeStyle = 'rgba(10,30,70,0.35)'; ctx.lineWidth = 7; ctx.stroke();
+  ctx.strokeStyle = r.color; ctx.lineWidth = 5; ctx.stroke();
+  if (half !== 1) {
+    ringPath(r, sq, Math.PI * 1.1, Math.PI * 1.6, ps * 1.02);
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 1.6; ctx.stroke();
+  }
+}
+
+function drawPump(p, i) {
+  const { cx, cy, r } = p, d = p.press * 7;
+  ctx.fillStyle = '#0f6f7c'; ctx.beginPath(); ctx.arc(cx, cy + 3, r + 9, 0, 6.3); ctx.fill();
+  ctx.fillStyle = '#12202c'; ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, 6.3); ctx.fill();
+  // ricarica
+  ctx.strokeStyle = '#7dffd9'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(cx, cy, r + 1.5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p.charge); ctx.stroke();
+  ctx.fillStyle = '#a2271f'; ctx.beginPath(); ctx.arc(cx, cy + 5, r - 5, 0, 6.3); ctx.fill();
+  const g = ctx.createRadialGradient(cx - 14, cy - 22 + d, 4, cx, cy + d, r);
+  g.addColorStop(0, '#ffb0a6'); g.addColorStop(0.45, '#ff6b5e'); g.addColorStop(1, '#e04436');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy - 4 + d, r - 5, 0, 6.3); ctx.fill();
+  // icona getto
+  ctx.save(); ctx.translate(cx, cy - 4 + d); ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(15, -2); ctx.lineTo(6, -2); ctx.lineTo(6, 18);
+  ctx.lineTo(-6, 18); ctx.lineTo(-6, -2); ctx.lineTo(-15, -2); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function smallBtn(b, on) {
+  ctx.fillStyle = on ? '#0c5460' : '#197f8c';
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 6.3); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1.5; ctx.stroke();
+}
+
+function fmt(t) { const s = Math.floor(t); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+
+function star(x, y, r, fill) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5, rad = i % 2 ? r * 0.45 : r;
+    ctx.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
+  }
+  ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+}
+
+function draw() {
+  const d = view.dpr;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#0b1a33'; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (view.rot && view.flip) ctx.setTransform(0, -view.s * d, view.s * d, 0, view.oy * d, (view.vh - view.ox) * d);
+  else if (view.rot) ctx.setTransform(0, view.s * d, -view.s * d, 0, (view.vw - view.oy) * d, view.ox * d);
+  else ctx.setTransform(view.s * d, 0, 0, view.s * d, view.ox * d, view.oy * d);
+
+  // scocca
+  let g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#3fd0d4'); g.addColorStop(1, '#1fa3b0');
+  ctx.fillStyle = '#0d6f7b'; rr(ctx, 2, 8, W - 4, H - 8, 58); ctx.fill();
+  ctx.fillStyle = g; rr(ctx, 2, 2, W - 4, H - 10, 58); ctx.fill();
+  ctx.fillStyle = '#10141f'; rr(ctx, TANK.x - 16, TANK.y - 16, TANK.w + 32, TANK.h + 32, 20); ctx.fill();
+
+  // vasca
+  ctx.save();
+  rr(ctx, TANK.x, TANK.y, TANK.w, TANK.h, 10); ctx.clip();
+  ctx.drawImage(backdrop, TANK.x, TANK.y, TANK.w, TANK.h);
+
+  for (const r of rings) if (r.peg < 0 && r.z === 0) drawRing(r, 0);
+  for (const f of fishes) drawFish(f);
+  for (const r of rings) if (r.peg >= 0) drawRing(r, 1);
+  for (const p of pegs) drawPeg(p);
+  for (const r of rings) if (r.peg >= 0) drawRing(r, 2);
+  for (const r of rings) if (r.peg < 0 && r.z === 1) drawRing(r, 0);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  for (const sp of specks) { ctx.beginPath(); ctx.arc(sp.x, sp.y, sp.r, 0, 6.3); ctx.fill(); }
+  // bolle
+  ctx.lineWidth = 1;
+  for (const b of bubbles) {
+    const a = Math.min(1, b.life * 2);
+    ctx.fillStyle = 'rgba(255,255,255,' + 0.22 * a + ')';
+    ctx.strokeStyle = 'rgba(255,255,255,' + 0.7 * a + ')';
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 6.3); ctx.fill(); ctx.stroke();
+  }
+  // riflesso del vetro
+  g = ctx.createLinearGradient(TANK.x, TANK.y, TANK.x + 260, TANK.y + 260);
+  g.addColorStop(0, 'rgba(255,255,255,0.22)'); g.addColorStop(0.5, 'rgba(255,255,255,0.03)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(TANK.x, TANK.y, TANK.w, TANK.h);
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 2;
+  rr(ctx, TANK.x, TANK.y, TANK.w, TANK.h, 10); ctx.stroke();
+
+  // HUD
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(6,50,60,0.75)';
+  ctx.font = '800 15px system-ui, sans-serif';
+  ctx.fillText('ANELLI', 77, 52); ctx.fillText('TEMPO', 923, 52);
+  ctx.fillStyle = '#fff'; ctx.font = '900 34px system-ui, sans-serif';
+  ctx.fillText(ringsDone() + '/' + rings.length, 77, 90);
+  ctx.fillText(fmt(time), 923, 90);
+  if (best !== null) {
+    ctx.fillStyle = 'rgba(6,50,60,0.75)'; ctx.font = '700 13px system-ui, sans-serif';
+    ctx.fillText('record ' + fmt(best), 923, 112);
+  }
+  ctx.fillStyle = 'rgba(6,50,60,0.75)'; ctx.font = '800 13px system-ui, sans-serif';
+  ctx.fillText(level.name.toUpperCase(), 77, 112);
+
+  drawPump(pumps[0], 0); drawPump(pumps[1], 1);
+
+  // pulsantini
+  smallBtn(BTN_SOUND, !soundOn); smallBtn(BTN_TILT, tiltOn && haveSensor); smallBtn(BTN_RESET, false);
+  ctx.strokeStyle = '#fff'; ctx.fillStyle = '#fff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // audio
+  let b = BTN_SOUND;
+  ctx.beginPath(); ctx.moveTo(b.x - 10, b.y - 4); ctx.lineTo(b.x - 4, b.y - 4); ctx.lineTo(b.x + 3, b.y - 10);
+  ctx.lineTo(b.x + 3, b.y + 10); ctx.lineTo(b.x - 4, b.y + 4); ctx.lineTo(b.x - 10, b.y + 4); ctx.closePath(); ctx.fill();
+  if (soundOn) { ctx.beginPath(); ctx.arc(b.x + 4, b.y, 8, -0.8, 0.8); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.moveTo(b.x + 7, b.y - 5); ctx.lineTo(b.x + 13, b.y + 5); ctx.moveTo(b.x + 13, b.y - 5); ctx.lineTo(b.x + 7, b.y + 5); ctx.stroke(); }
+  // inclinazione (telefonino inclinato)
+  b = BTN_TILT;
+  ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(tiltOn && haveSensor ? -0.5 + Math.sin(performance.now() / 300) * 0.2 : -0.5);
+  rr(ctx, -6, -11, 12, 22, 3); ctx.stroke(); ctx.restore();
+  // ricomincia
+  b = BTN_RESET;
+  ctx.beginPath(); ctx.arc(b.x, b.y, 9, -0.3, Math.PI * 1.5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(b.x + 3, b.y - 14); ctx.lineTo(b.x + 10, b.y - 8); ctx.lineTo(b.x + 1, b.y - 5); ctx.closePath(); ctx.fill();
+
+  if (state === 'start') overlay(() => {
+    ctx.fillStyle = '#fff'; ctx.font = 'italic 900 64px "Arial Black", Impact, system-ui, sans-serif';
+    ctx.fillText('NINNI GAME', W / 2, 180);
+    ctx.font = '700 21px system-ui, sans-serif'; ctx.fillStyle = '#d8f4ff';
+    ctx.fillText('Premi i due tasti per soffiare l’acqua', W / 2, 232);
+    ctx.fillText('e infila tutti gli anelli sui razzi. Inclina e scuoti il telefono!', W / 2, 260);
+    const pulse = 1 + Math.sin(performance.now() / 260) * 0.04;
+    ctx.save(); ctx.translate(W / 2, 335); ctx.scale(pulse, pulse);
+    ctx.fillStyle = '#ff6b5e'; rr(ctx, -120, -30, 240, 60, 30); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = '900 26px system-ui, sans-serif'; ctx.fillText('GIOCA', 0, 9);
+    ctx.restore();
+  });
+
+  if (state === 'win') overlay(() => {
+    const k = Math.min(1, winAnim / 0.5);
+    ctx.save(); ctx.translate(W / 2, 0); ctx.scale(k, k); ctx.translate(-W / 2, 0);
+    ctx.fillStyle = '#fff'; ctx.font = 'italic 900 62px "Arial Black", Impact, system-ui, sans-serif';
+    ctx.fillText('BRAVISSIMO!', W / 2, 150);
+    const n = starsFor(time);
+    for (let i = 0; i < 3; i++) star(W / 2 + (i - 1) * 78, 215 - (i === 1 ? 10 : 0), 32, i < n ? '#ffd23f' : 'rgba(255,255,255,0.2)');
+    ctx.fillStyle = '#d8f4ff'; ctx.font = '700 24px system-ui, sans-serif';
+    ctx.fillText('Tempo ' + fmt(time) + (best !== null ? '   ·   Record ' + fmt(best) : ''), W / 2, 290);
+    ctx.fillStyle = '#ff6b5e'; rr(ctx, W / 2 - 130, 325, 260, 60, 30); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = '900 24px system-ui, sans-serif'; ctx.fillText('GIOCA ANCORA', W / 2, 364);
+    ctx.restore();
+  });
+}
+function overlay(fn) {
+  ctx.fillStyle = 'rgba(6,20,50,0.72)'; rr(ctx, 2, 2, W - 4, H - 4, 58); ctx.fill();
+  ctx.textAlign = 'center'; fn();
+}
+
+/* ---------------- Loop ---------------- */
+function resize() {
+  const vw = innerWidth, vh = innerHeight, dpr = Math.min(devicePixelRatio || 1, 2);
+  cv.width = Math.round(vw * dpr); cv.height = Math.round(vh * dpr);
+  const rot = vh > vw, long = rot ? vh : vw, short = rot ? vw : vh;
+  const s = Math.min(long / W, short / H);
+  view = { s, rot, vw, vh, dpr, ox: (long - W * s) / 2, oy: (short - H * s) / 2, flip: rot && view.flip };
+}
+addEventListener('resize', resize);
+addEventListener('orientationchange', () => setTimeout(resize, 200));
+
+let last = 0, acc = 0;
+function frame(t) {
+  const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t; acc += dt;
+  let n = 0;
+  while (acc >= DT && n < 3) { physicsStep(); acc -= DT; n++; }
+  if (n === 3) acc = 0;
+  draw();
+  requestAnimationFrame(frame);
+}
+
+resize();
+loadLevel(0);
+requestAnimationFrame(frame);
+
+// per debug / test
+window.__game = { get state() { return state; }, get rings() { return rings; }, fishes, get time() { return time; },
+  pumps, step: physicsStep, motion(o, m) { if (o) onOrient(o); if (m) onMotion(m); }, get acc() { return [accX, accY, view.flip]; }, down: pumpDown, up: pumpUp, start() { state = 'play'; }, load: loadLevel };
+</script>
+</body>
+</html>
