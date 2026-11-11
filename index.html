@@ -1215,7 +1215,7 @@ function promoTitle() {
   const lines = tall ? ['HOOP', 'LAGOON'] : ['HOOP LAGOON'];
   const size = tall ? Math.min(cw * 0.2, ch * 0.13) : Math.min(cw * 0.1, ch * 0.16);
   ctx.font = 'italic 900 ' + size + 'px "Arial Black", Impact, system-ui, sans-serif';
-  let y = ch * (tall ? 0.16 : 0.2);
+  let y = ch * 0.15 + size * 0.85;     // sotto la zona etichette di CrazyGames (angolo in alto a sinistra)
   for (const ln of lines) {
     ctx.shadowColor = 'rgba(0,20,60,0.45)'; ctx.shadowBlur = size * 0.25; ctx.shadowOffsetY = size * 0.06;
     ctx.lineWidth = size * 0.16; ctx.strokeStyle = '#0b3d7a'; ctx.strokeText(ln, cw / 2, y);
