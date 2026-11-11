@@ -749,7 +749,7 @@ document.addEventListener('webkitfullscreenchange', () => setTimeout(resize, 100
 // iPhone e Chrome non li accettano dentro pointerdown.
 function onGesture() {
   if (ac && ac.state === 'suspended' && !adPlaying) { try { ac.resume(); } catch (e) {} }   // iPhone: l'audio riparte solo da un tocco
-  if (sensorState === 'off') startSensors();
+  if (sensorState === 'off' && isMobile()) startSensors();
   if (pendingFs) { const m = pendingFs; pendingFs = 0; toggleFullscreen(m === 1); }
 }
 document.addEventListener('touchend', onGesture, { passive: true });
@@ -829,7 +829,7 @@ function startSensors() {
   pr.then(res => {
     if (res !== 'granted') {
       sensorState = 'denied';
-      toast(t('motionDenied'), 5);
+      toast(t(IOS ? 'motionDenied' : 'motionNone'), 5);
       return;
     }
     // il permesso è unico per movimento e orientamento: il secondo arriva già concesso
@@ -838,8 +838,8 @@ function startSensors() {
   }).catch(() => { sensorState = 'off'; });     // chiesto senza un tocco valido: riprova al prossimo
 }
 function toggleTilt() {
-  if (sensorState === 'off') return;            // ci pensa onGesture alla fine di questo tocco
-  if (sensorState === 'denied') { toast(t('motionDenied'), 5); return; }
+  if (sensorState === 'off') { if (!isMobile()) toast(t('motionNone'), 3); return; }   // sul telefono ci pensa onGesture
+  if (sensorState === 'denied') { toast(t(IOS ? 'motionDenied' : 'motionNone'), 5); return; }
   if (sensorState === 'none') { toast(t('motionNone'), 3); return; }
   tiltOn = !tiltOn;
   toast(t(tiltOn ? 'motionOn' : 'motionOff'), 1.6);
