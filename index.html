@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
@@ -7,16 +7,18 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0b1a33">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Ninni">
+<meta name="apple-mobile-web-app-title" content="Hoop Lagoon">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<title>Ninni Water Game</title>
+<title>Hoop Lagoon</title>
+<!-- SDK CrazyGames: su altri siti resta inattivo (environment "disabled") -->
+<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 <style>
   html, body {
     margin: 0; height: 100%; background: #0b1a33; overflow: hidden;
     overscroll-behavior: none; touch-action: none;
-    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; -webkit-touch-callout: none;
     -webkit-tap-highlight-color: transparent;
   }
   :root { --sl: env(safe-area-inset-left, 0px); --sr: env(safe-area-inset-right, 0px); --st: env(safe-area-inset-top, 0px); --sb: env(safe-area-inset-bottom, 0px); }
@@ -28,7 +30,7 @@
 <script>
 'use strict';
 /* ============================================================
-   NINNI WATER GAME
+   HOOP LAGOON
    Coordinate logiche: 1000 x 470 (orizzontale). In verticale il
    gioco viene ruotato di 90° dentro il canvas.
    ============================================================ */
@@ -51,17 +53,58 @@ const PUMP_REFILL = 0.45;                               // secondi per ricaricar
 const TIME_LIMIT = 120;                                 // secondi per livello
 const NOZZLES = [{ x: 0.14, dx: 0.5 }, { x: 0.86, dx: -0.5 }];   // getti: sinistra e destra, inclinati verso il centro
 const LEVELS = [
-  { name: 'Livello 1', rings: 18, min: 5, fish: 5, fishSpeed: 1,      // come il gioco vero
+  { rings: 18, min: 5, fish: 5, fishSpeed: 1,      // come il gioco vero
     pegs: [{ x: 0.36, tip: 0.40, base: 0.74 }, { x: 0.66, tip: 0.30, base: 0.74 }] },
-  { name: 'Livello 2', rings: 18, min: 5, fish: 5, fishSpeed: 1.1,    // tre razzi
+  { rings: 18, min: 5, fish: 5, fishSpeed: 1.1,    // tre razzi
     pegs: [{ x: 0.30, tip: 0.42, base: 0.74 }, { x: 0.50, tip: 0.30, base: 0.74 }, { x: 0.70, tip: 0.42, base: 0.74 }] },
-  { name: 'Livello 3', rings: 18, min: 5, fish: 7, fishSpeed: 1.3,    // razzi alti e lontani
+  { rings: 18, min: 5, fish: 7, fishSpeed: 1.3,    // razzi alti e lontani
     pegs: [{ x: 0.28, tip: 0.30, base: 0.74 }, { x: 0.72, tip: 0.22, base: 0.74 }] },
-  { name: 'Livello 4', rings: 16, min: 5, fish: 9, fishSpeed: 1.6,    // un solo razzo e tanti pesci
+  { rings: 16, min: 5, fish: 9, fishSpeed: 1.6,    // un solo razzo e tanti pesci
     pegs: [{ x: 0.50, tip: 0.28, base: 0.74 }] },
-  { name: 'Livello 5', rings: 18, min: 5, fish: 6, fishSpeed: 1.2, gyre: 1,   // corrente che gira in tondo
+  { rings: 18, min: 5, fish: 6, fishSpeed: 1.2, gyre: 1,   // corrente che gira in tondo
     pegs: [{ x: 0.33, tip: 0.36, base: 0.74 }, { x: 0.67, tip: 0.36, base: 0.74 }] },
 ];
+const GAME_NAME = 'Hoop Lagoon';
+const STR = {
+  en: {
+    level: 'Level {0}', goalToast: '{0}: land at least {1} rings in 2 minutes',
+    rings: 'RINGS', time: 'TIME', goal: 'GOAL {0}', goalOk: '\u2714 GOAL OK', best: 'best: {0} rings',
+    tag1: 'Press the buttons to pump the water: you have 2 minutes',
+    tagMobile: 'to land at least {0} rings on the rockets. Tilt and shake your phone!',
+    tagDesk: 'to land at least {0} rings on the rockets. Keys: \u2190 / A  and  \u2192 / D',
+    play: 'PLAY', timeUp: "TIME'S UP!", perfect: 'PERFECT!', allDone: 'ALL DONE!', cleared: 'LEVEL CLEARED!',
+    landed: 'Rings landed: {0} / {1}', newBest: 'new best!', needed: 'You needed at least {0} to unlock the next level',
+    allIn: 'All rings in {0}!', everyLevel: 'You cleared every level!',
+    retry: 'RETRY', next: 'NEXT \u25B6', fromStart: 'LEVEL 1', video: '\u25B6 VIDEO: +30 s',
+    bonus: '+30 seconds!', adFail: 'No video available right now',
+    fsAlready: 'Already full screen', motionOn: 'Phone motion on', motionOff: 'Phone motion off',
+    motionDenied: 'Motion blocked: close Safari, reopen it and tap \u201cAllow\u201d', motionNone: 'This device sends no motion data',
+    hintTitle: 'Full screen on iPhone', hint1: '1.  In Safari tap the Share button  \u2B06', hint2: '2.  Choose \u201cAdd to Home Screen\u201d',
+    hint3: '3.  Open Hoop Lagoon from the icon: no bars', hintClose: 'Tap to close',
+  },
+  it: {
+    level: 'Livello {0}', goalToast: '{0}: infila almeno {1} anelli in 2 minuti',
+    rings: 'ANELLI', time: 'TEMPO', goal: 'OBIETTIVO {0}', goalOk: '\u2714 OBIETTIVO OK', best: 'record: {0} anelli',
+    tag1: 'Premi i tasti per soffiare l\u2019acqua: hai 2 minuti',
+    tagMobile: 'per infilare almeno {0} anelli sui razzi. Inclina e scuoti il telefono!',
+    tagDesk: 'per infilare almeno {0} anelli sui razzi. Tasti: \u2190 / A  e  \u2192 / D',
+    play: 'GIOCA', timeUp: 'TEMPO SCADUTO!', perfect: 'PERFETTO!', allDone: 'HAI FINITO!', cleared: 'LIVELLO SUPERATO!',
+    landed: 'Anelli infilati: {0} / {1}', newBest: 'nuovo record!', needed: 'Ne servivano almeno {0} per passare al livello successivo',
+    allIn: 'Tutti gli anelli in {0}!', everyLevel: 'Hai superato tutti i livelli!',
+    retry: 'RIPROVA', next: 'AVANTI \u25B6', fromStart: 'LIVELLO 1', video: '\u25B6 VIDEO: +30 s',
+    bonus: '+30 secondi!', adFail: 'Nessun video disponibile ora',
+    fsAlready: 'Sei gi\u00e0 a tutto schermo', motionOn: 'Movimento del telefono attivo', motionOff: 'Movimento del telefono spento',
+    motionDenied: 'Movimento non consentito: chiudi Safari, riaprilo e tocca \u201cConsenti\u201d', motionNone: 'Questo dispositivo non invia i dati di movimento',
+    hintTitle: 'A tutto schermo su iPhone', hint1: '1.  In Safari tocca il tasto Condividi  \u2B06', hint2: '2.  Scegli \u201cAggiungi alla schermata Home\u201d',
+    hint3: '3.  Apri Hoop Lagoon dall\u2019icona: niente barre', hintClose: 'Tocca per chiudere',
+  },
+};
+let LANG = 'en';
+function setLang(loc) { LANG = String(loc || '').toLowerCase().startsWith('it') ? 'it' : 'en'; document.documentElement.lang = LANG; }
+try { setLang(navigator.language); } catch (e) {}
+function t(k, ...a) { const str = (STR[LANG] && STR[LANG][k]) || STR.en[k] || k; return str.replace(/\{(\d)\}/g, (_, i) => a[i]); }
+function levelName(i) { return t('level', i + 1); }
+
 const COLORS = ['#ff8fc7', '#ffe14d', '#8fd0ff', '#c9a2ff'];
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const TOUCH = (navigator.maxTouchPoints || 0) > 0;
@@ -75,11 +118,28 @@ let level, pegs, nozzles, rings, bubbles;
 let state = 'start';              // start | play | end
 let curLevel = 0, unlocked = 0, timeLeft = TIME_LIMIT, lastSec = 0, winHold = 0, endAnim = 0, result = null;
 let toastText = '', toastT = 0, hintOpen = false, pendingFs = 0;
-try {
-  unlocked = Math.min(LEVELS.length - 1, parseInt(localStorage.getItem('ninni_unlocked'), 10) || 0);
-  curLevel = Math.min(unlocked, parseInt(localStorage.getItem('ninni_level'), 10) || 0);
-} catch (e) {}
-function store(k, v) { try { localStorage.setItem(k, String(v)); } catch (e) {} }
+let adPlaying = false, continueUsed = false, runOffered = false, rewardBroken = false;
+// Progressi: su CrazyGames solo nel loro Data module (obbligatorio), altrove in localStorage.
+const SAVE_KEY = 'hooplagoon_save';
+const save = { unlocked: 0, level: 0, best: [], passed: [] };
+function readSave() {
+  let raw = null;
+  try { raw = CG.ok ? CG.sdk.data.getItem(SAVE_KEY) : localStorage.getItem(SAVE_KEY); } catch (e) {}
+  if (raw) { try { Object.assign(save, JSON.parse(raw)); } catch (e) {} }
+  else if (!CG.ok) {                      // porta con s\u00e9 i progressi della versione precedente
+    try {
+      save.unlocked = parseInt(localStorage.getItem('ninni_unlocked'), 10) || 0;
+      for (let i = 0; i < LEVELS.length; i++) { const r = parseInt(localStorage.getItem('ninni_rings_' + i), 10); if (r > 0) save.best[i] = r; }
+      for (let i = 0; i < save.unlocked; i++) save.passed[i] = 1;
+    } catch (e) {}
+  }
+  unlocked = Math.max(0, Math.min(LEVELS.length - 1, save.unlocked | 0));
+  curLevel = Math.max(0, Math.min(unlocked, save.level | 0));
+}
+function writeSave() {
+  const raw = JSON.stringify(save);
+  try { if (CG.ok) CG.sdk.data.setItem(SAVE_KEY, raw); else localStorage.setItem(SAVE_KEY, raw); } catch (e) {}
+}
 function toast(t, secs) { toastText = t; toastT = secs || 2.5; }
 let soundOn = true;
 // Movimento del telefono: accX/accY = "gravità efficace" (gravità meno accelerazione del telefono)
@@ -250,12 +310,20 @@ function loadLevel(idx) {
   drawBackdrop();
 }
 function startLevel(idx) {
-  curLevel = idx; store('ninni_level', idx);
+  curLevel = idx; save.level = idx; writeSave();
   loadLevel(idx);
-  state = 'play';
-  toast(level.name + ': infila almeno ' + level.min + ' anelli in 2 minuti', 3);
+  state = 'play'; continueUsed = false; runOffered = false;
+  gameplay(true);
+  toast(t('goalToast', levelName(idx), level.min), 3);
 }
-function recordOf(idx) { try { return parseInt(localStorage.getItem('ninni_rings_' + idx), 10) || 0; } catch (e) { return 0; } }
+// tempo extra dopo un video premio: si continua lo stesso livello
+function continueLevel() {
+  continueUsed = true; result = null; endAnim = 0; winHold = 0;
+  timeLeft = 30; lastSec = 30; state = 'play';
+  gameplay(true);
+  toast(t('bonus'), 2);
+}
+function recordOf(idx) { return save.best[idx] | 0; }
 
 /* ---------------- Fisica anelli ---------------- */
 function physicsStep() {
@@ -488,11 +556,18 @@ function endLevel() {
   const done = ringsDone(), all = rings.length, passed = done >= level.min;
   const stars = !passed ? 0 : done === all ? 3 : done >= Math.ceil((level.min + all) / 2) ? 2 : 1;
   const record = done > recordOf(curLevel);
-  if (record) store('ninni_rings_' + curLevel, done);
+  if (record) save.best[curLevel] = done;
   const last = curLevel === LEVELS.length - 1;
-  if (passed && !last && curLevel + 1 > unlocked) { unlocked = curLevel + 1; store('ninni_unlocked', unlocked); }
-  result = { done, all, passed, stars, record, last, used: TIME_LIMIT - timeLeft };
+  if (passed) save.passed[curLevel] = 1;
+  if (passed && !last && curLevel + 1 > unlocked) { unlocked = curLevel + 1; save.unlocked = unlocked; }
+  writeSave();
+  if (passed) reportProgress();
+  // video premio "+30 s": solo se manca poco, una volta per partita, mai dopo un midgame nello stesso passaggio
+  const offer = !passed && adsReady() && !continueUsed && !rewardBroken && done >= Math.max(1, level.min - 3);
+  if (offer) runOffered = true;
+  result = { done, all, passed, stars, record, last, offer, used: TIME_LIMIT - timeLeft + (continueUsed ? 30 : 0) };
   state = 'end'; endAnim = 0;
+  gameplay(false);
   for (const p of pumps) { p.down = false; p.ids.clear(); }
   if (passed) sfxWin(); else sfxFail();
 }
@@ -500,11 +575,75 @@ function endLevel() {
 function endButtons() {
   if (!result) return [];
   const y = 334, h = 58;
-  const retry = { label: 'RIPROVA', act: () => startLevel(curLevel) };
-  if (!result.passed) return [{ ...retry, x: W / 2 - 130, y, w: 260, h, main: true }];
-  const next = result.last ? { label: 'DAL LIVELLO 1', act: () => startLevel(0) } : { label: 'AVANTI \u25B6', act: () => startLevel(curLevel + 1) };
+  // un'offerta video e un midgame non possono stare nello stesso passaggio fra due livelli
+  const go = idx => () => (runOffered ? startLevel(idx) : withMidgame(() => startLevel(idx)));
+  const retry = { label: t('retry'), act: go(curLevel) };
+  if (!result.passed) {
+    if (result.offer && !rewardBroken) return [{ ...retry, x: W / 2 - 270, y, w: 250, h, main: true },
+      { label: t('video'), act: showRewarded, x: W / 2 + 20, y, w: 250, h, video: true }];
+    return [{ ...retry, x: W / 2 - 130, y, w: 260, h, main: true }];
+  }
+  const next = result.last ? { label: t('fromStart'), act: go(0) } : { label: t('next'), act: go(curLevel + 1) };
   return [{ ...retry, x: W / 2 - 270, y, w: 250, h }, { ...next, x: W / 2 + 20, y, w: 250, h, main: true }];
 }
+
+/* ---------------- CrazyGames SDK ---------------- */
+// Tutto passa da qui: fuori da CrazyGames (es. GitHub Pages) CG.ok resta false e il gioco funziona da solo.
+const CG = { ok: false, sdk: null, env: 'none', adblock: false, mute: false, device: null };
+async function initPlatform() {
+  try {
+    const S = window.CrazyGames && window.CrazyGames.SDK;
+    if (!S) return;
+    // se l'SDK non risponde (sito non CrazyGames, rete lenta) il gioco parte lo stesso
+    const ready = await Promise.race([S.init().then(() => true), new Promise(r => setTimeout(() => r(false), 5000))]);
+    if (!ready) return;
+    CG.env = S.environment;
+    if (CG.env !== 'crazygames' && CG.env !== 'local') return;
+    CG.sdk = S; CG.ok = true;
+    try { S.game.loadingStart(); } catch (e) {}
+    try { const si = S.user.systemInfo; if (si) { if (si.locale) setLang(si.locale); if (si.device) CG.device = si.device.type; } } catch (e) {}
+    try { CG.mute = !!S.game.settings.muteAudio; S.game.addSettingsChangeListener(st => { CG.mute = !!st.muteAudio; }); } catch (e) {}
+    try { CG.adblock = await S.ad.hasAdblock(); } catch (e) {}
+    try { S.game.loadingStop(); } catch (e) {}
+  } catch (e) { CG.ok = false; }
+}
+let gpOn = false;
+function gameplay(on) {
+  if (!CG.ok || gpOn === on) return;
+  gpOn = on;
+  try { if (on) CG.sdk.game.gameplayStart(); else CG.sdk.game.gameplayStop(); } catch (e) {}
+}
+function reportProgress() {
+  if (!CG.ok) return;
+  let n = 0; for (let i = 0; i < LEVELS.length; i++) if (save.passed[i]) n++;
+  try { CG.sdk.game.reportGameCompletedPercentage(Math.round(n / LEVELS.length * 100)); } catch (e) {}
+}
+function adsReady() { return CG.ok && !CG.adblock; }
+function adAudio(off) {                 // il gioco deve tacere durante il video
+  if (!ac) return;
+  try { if (off) ac.suspend(); else ac.resume(); } catch (e) {}
+}
+// pubblicit\u00e0 fra un livello e l'altro (la frequenza la decide CrazyGames)
+function withMidgame(next) {
+  if (!adsReady()) { next(); return; }
+  adPlaying = true;
+  const done = () => { if (!adPlaying) return; adPlaying = false; adAudio(false); next(); };
+  try { CG.sdk.ad.requestAd('midgame', { adStarted: () => adAudio(true), adFinished: done, adError: done }); } catch (e) { done(); }
+}
+// video facoltativo che regala 30 secondi
+function showRewarded() {
+  if (!adsReady() || adPlaying) return;
+  adPlaying = true;
+  let settled = false;
+  const finish = ok => {
+    if (settled) return; settled = true; adPlaying = false; adAudio(false);
+    if (ok) continueLevel(); else { rewardBroken = true; toast(t('adFail'), 2.5); }
+  };
+  try { CG.sdk.ad.requestAd('rewarded', { adStarted: () => adAudio(true), adFinished: () => finish(true), adError: () => finish(false) }); }
+  catch (e) { finish(false); }
+}
+function isMobile() { return CG.device ? CG.device !== 'desktop' : TOUCH; }
+function fsAllowed() { return !CG.ok; }   // su CrazyGames lo schermo intero lo d\u00e0 il sito: vietato il nostro pulsante
 
 /* ---------------- Input ---------------- */
 function toLogical(e) {
@@ -547,11 +686,12 @@ function pumpUp(id) {
 
 cv.addEventListener('pointerdown', e => {
   e.preventDefault();
+  if (adPlaying) return;
   initAudio();
   const p = toLogical(e);
   if (hintOpen) { hintOpen = false; return; }
-  if (state === 'start') { if (canFullscreen() && !fsElement()) pendingFs = 1; startLevel(curLevel); return; }
-  if (hit(BTN_FULL, p)) { pendingFs = 2; if (!canFullscreen()) toggleFullscreen(false); return; }
+  if (state === 'start') { if (fsAllowed() && canFullscreen() && !fsElement()) pendingFs = 1; startLevel(curLevel); return; }
+  if (fsAllowed() && hit(BTN_FULL, p)) { pendingFs = 2; if (!canFullscreen()) toggleFullscreen(false); return; }
   if (state === 'end') {
     if (endAnim > 0.8) for (const b of endButtons()) if (p.x > b.x && p.x < b.x + b.w && p.y > b.y && p.y < b.y + b.h) { b.act(); break; }
     return;
@@ -567,18 +707,19 @@ for (const ev of ['pointerup', 'pointercancel'])
 cv.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
-const KEYS = { ArrowLeft: 0, a: 0, A: 0, ArrowRight: 1, l: 1, L: 1, d: 1, D: 1 };
+const KEYS = { ArrowLeft: 0, KeyA: 0, ArrowRight: 1, KeyD: 1, KeyL: 1 };   // per posizione del tasto: va bene anche su AZERTY
 addEventListener('keydown', e => {
-  if (e.repeat) return;
+  if (e.code in KEYS || e.code === 'Space') e.preventDefault();
+  if (e.repeat || adPlaying) return;
   initAudio();
   if (hintOpen) { hintOpen = false; return; }
   if (state === 'start') { startLevel(curLevel); return; }
   if (state === 'end') { if (endAnim > 0.8 && (e.key === 'Enter' || e.key === ' ')) { const m = endButtons().find(b => b.main); if (m) m.act(); } return; }
-  if (e.key in KEYS) pumpDown(KEYS[e.key], 'k' + e.key);
-  if (e.key === 'r' || e.key === 'R') startLevel(curLevel);
-  if (e.key === 'f' || e.key === 'F') toggleFullscreen(false);
+  if (e.code in KEYS) pumpDown(KEYS[e.code], 'k' + e.code);
+  if (e.code === 'KeyR') startLevel(curLevel);
+  if (e.code === 'KeyF' && fsAllowed()) toggleFullscreen(false);
 });
-addEventListener('keyup', e => { if (e.key in KEYS) pumpUp('k' + e.key); });
+addEventListener('keyup', e => { if (e.code in KEYS) pumpUp('k' + e.code); });
 
 /* ---------------- Schermo intero ---------------- */
 function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
@@ -592,7 +733,7 @@ function toggleFullscreen(enterOnly) {
     const el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
     if (!req) {                       // iPhone: Safari non lo permette, serve l'icona sulla schermata Home
       if (enterOnly) return;
-      if (isStandalone()) toast('Sei già a tutto schermo', 2); else hintOpen = true;
+      if (isStandalone()) toast(t('fsAlready'), 2); else hintOpen = true;
       return;
     }
     const pr = req.call(el, { navigationUI: 'hide' });
@@ -606,6 +747,7 @@ document.addEventListener('webkitfullscreenchange', () => setTimeout(resize, 100
 // Fullscreen e permesso dei sensori vanno chiesti alla FINE del tocco (touchend / click):
 // iPhone e Chrome non li accettano dentro pointerdown.
 function onGesture() {
+  if (ac && ac.state === 'suspended' && !adPlaying) { try { ac.resume(); } catch (e) {} }   // iPhone: l'audio riparte solo da un tocco
   if (sensorState === 'off') startSensors();
   if (pendingFs) { const m = pendingFs; pendingFs = 0; toggleFullscreen(m === 1); }
 }
@@ -676,7 +818,7 @@ function startSensors() {
     sensorState = 'on'; tiltOn = true;
     addEventListener('devicemotion', onMotion);
     addEventListener('deviceorientation', onOrient);
-    setTimeout(() => { if (!haveSensor) { sensorState = 'none'; if (TOUCH) toast('Questo telefono non invia i dati di movimento', 3); } }, 3000);
+    setTimeout(() => { if (!haveSensor) { sensorState = 'none'; if (isMobile()) toast(t('motionNone'), 3); } }, 3000);
   };
   const ask = DM && typeof DM.requestPermission === 'function' ? DM : DO && typeof DO.requestPermission === 'function' ? DO : null;
   if (!ask) { listen(); return; }
@@ -686,7 +828,7 @@ function startSensors() {
   pr.then(res => {
     if (res !== 'granted') {
       sensorState = 'denied';
-      toast('Movimento non consentito: chiudi Safari, riaprilo e tocca “Consenti”', 5);
+      toast(t('motionDenied'), 5);
       return;
     }
     // il permesso è unico per movimento e orientamento: il secondo arriva già concesso
@@ -696,14 +838,15 @@ function startSensors() {
 }
 function toggleTilt() {
   if (sensorState === 'off') return;            // ci pensa onGesture alla fine di questo tocco
-  if (sensorState === 'denied') { toast('Movimento non consentito: chiudi Safari, riaprilo e tocca “Consenti”', 5); return; }
-  if (sensorState === 'none') { toast('Questo dispositivo non invia i dati di movimento', 3); return; }
+  if (sensorState === 'denied') { toast(t('motionDenied'), 5); return; }
+  if (sensorState === 'none') { toast(t('motionNone'), 3); return; }
   tiltOn = !tiltOn;
-  toast(tiltOn ? 'Movimento del telefono attivo' : 'Movimento del telefono spento', 1.6);
+  toast(t(tiltOn ? 'motionOn' : 'motionOff'), 1.6);
 }
 
 /* ---------------- Audio ---------------- */
 let ac = null, noiseBuf = null;
+function audioOn() { return soundOn && !CG.mute && !adPlaying; }
 function initAudio() {
   if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
   try {
@@ -714,7 +857,7 @@ function initAudio() {
   } catch (e) { ac = null; }
 }
 function sfxPump(power) {
-  if (!ac || !soundOn) return;
+  if (!ac || !audioOn()) return;
   const t = ac.currentTime, vol = 0.1 + 0.25 * power;
   const src = ac.createBufferSource(); src.buffer = noiseBuf;
   const f = ac.createBiquadFilter(); f.type = 'lowpass';
@@ -734,13 +877,13 @@ function tone(freq, t, dur, vol) {
   o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
 }
 function sfxCatch(n) {
-  if (!ac || !soundOn) return;
+  if (!ac || !audioOn()) return;
   const t = ac.currentTime, base = 660 * Math.pow(1.06, Math.min(n, 12));
   tone(base, t, 0.25, 0.2); tone(base * 1.5, t + 0.07, 0.3, 0.16);
 }
 let lastBump = 0;
 function sfxBump(force) {
-  if (!ac || !soundOn || ac.currentTime - lastBump < 0.08) return;
+  if (!ac || !audioOn() || ac.currentTime - lastBump < 0.08) return;
   lastBump = ac.currentTime;
   const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
   o.type = 'sine'; o.frequency.setValueAtTime(320, t); o.frequency.exponentialRampToValueAtTime(140, t + 0.09);
@@ -748,16 +891,16 @@ function sfxBump(force) {
   o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.12);
 }
 function sfxTick(sec) {
-  if (!ac || !soundOn) return;
+  if (!ac || !audioOn()) return;
   tone(sec <= 3 ? 1320 : 990, ac.currentTime, 0.08, 0.12);
 }
 function sfxFail() {
-  if (!ac || !soundOn) return;
+  if (!ac || !audioOn()) return;
   const t = ac.currentTime;
   [523, 440, 349, 262].forEach((f, i) => tone(f, t + i * 0.16, 0.45, 0.18));
 }
 function sfxWin() {
-  if (!ac || !soundOn) return;
+  if (!ac || !audioOn()) return;
   const t = ac.currentTime;
   [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, t + i * 0.11, 0.5, 0.2));
 }
@@ -801,10 +944,10 @@ function drawBackdrop() {
   // titolo
   c.save(); c.translate(w - 22, h - 62); c.textAlign = 'right';
   c.font = 'italic 900 50px "Arial Black", Impact, system-ui, sans-serif';
-  c.lineJoin = 'round'; c.lineWidth = 8; c.strokeStyle = 'rgba(6,40,90,0.55)'; c.strokeText('NINNI', 0, 0);
-  c.fillStyle = '#fff'; c.fillText('NINNI', 0, 0);
+  c.lineJoin = 'round'; c.lineWidth = 8; c.strokeStyle = 'rgba(6,40,90,0.55)'; c.strokeText('HOOP', 0, 0);
+  c.fillStyle = '#fff'; c.fillText('HOOP', 0, 0);
   c.font = '800 15px system-ui, sans-serif'; c.fillStyle = '#d8f4ff';
-  c.fillText('W A T E R   G A M E', -2, 20);
+  c.fillText('L  A  G  O  O  N', -2, 20);
   c.restore();
   // sabbia (profilo del fondo)
   g = c.createLinearGradient(0, h - 40, 0, h);
@@ -945,14 +1088,14 @@ function draw() {
   const done = ringsDone(), goal = done >= level.min;
   ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(6,50,60,0.75)';
   ctx.font = '800 13px system-ui, sans-serif';
-  ctx.fillText(level.name.toUpperCase(), 77, 34);
+  ctx.fillText(levelName(curLevel).toUpperCase(), 77, 34);
   ctx.font = '800 15px system-ui, sans-serif';
-  ctx.fillText('ANELLI', 77, 62); ctx.fillText('TEMPO', 923, 62);
+  ctx.fillText(t('rings'), 77, 62); ctx.fillText(t('time'), 923, 62);
   ctx.fillStyle = '#fff'; ctx.font = '900 34px system-ui, sans-serif';
   ctx.fillText(done + '/' + rings.length, 77, 98);
   ctx.font = '800 14px system-ui, sans-serif';
   ctx.fillStyle = goal ? '#0d5c2c' : 'rgba(6,50,60,0.75)';
-  ctx.fillText(goal ? '\u2714 OBIETTIVO OK' : 'OBIETTIVO ' + level.min, 77, 122);
+  ctx.fillText(goal ? t('goalOk') : t('goal', level.min), 77, 122, 140);
   // tempo che scende: rosso e pulsante negli ultimi 10 secondi
   const tl = Math.max(0, Math.ceil(timeLeft)), hurry = state === 'play' && tl <= 10;
   ctx.save(); ctx.translate(923, 98);
@@ -962,13 +1105,13 @@ function draw() {
   const rec = recordOf(curLevel);
   if (rec > 0) {
     ctx.fillStyle = 'rgba(6,50,60,0.75)'; ctx.font = '700 13px system-ui, sans-serif';
-    ctx.fillText('record ' + rec + ' anelli', 923, 122);
+    ctx.fillText(t('best', rec), 923, 122, 140);
   }
 
   drawPump(pumps[0], 0); drawPump(pumps[1], 1);
 
   // pulsantini
-  smallBtn(BTN_SOUND, !soundOn); smallBtn(BTN_TILT, tiltOn && haveSensor); smallBtn(BTN_RESET, false); smallBtn(BTN_FULL, !!fsElement());
+  smallBtn(BTN_SOUND, !soundOn); smallBtn(BTN_TILT, tiltOn && haveSensor); smallBtn(BTN_RESET, false); if (fsAllowed()) smallBtn(BTN_FULL, !!fsElement());
   ctx.strokeStyle = '#fff'; ctx.fillStyle = '#fff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   // audio
   let b = BTN_SOUND;
@@ -982,7 +1125,7 @@ function draw() {
   rr(ctx, -6, -11, 12, 22, 3); ctx.stroke(); ctx.restore();
   // schermo intero: quattro angoli (verso fuori per entrare, verso dentro per uscire)
   b = BTN_FULL;
-  { const o = fsElement() ? -1 : 1;
+  if (fsAllowed()) { const o = fsElement() ? -1 : 1;
     for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
       const cx = b.x + sx * 8, cy = b.y + sy * 8;
       ctx.beginPath(); ctx.moveTo(cx - sx * 6 * o, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy - sy * 6 * o); ctx.stroke();
@@ -1003,48 +1146,48 @@ function draw() {
 
   if (state === 'start') overlay(() => {
     ctx.fillStyle = '#fff'; ctx.font = 'italic 900 64px "Arial Black", Impact, system-ui, sans-serif';
-    ctx.fillText('NINNI WATER GAME', W / 2, 160, W - 120);
+    ctx.fillText(GAME_NAME.toUpperCase(), W / 2, 160, W - 120);
     ctx.font = '700 21px system-ui, sans-serif'; ctx.fillStyle = '#d8f4ff';
-    ctx.fillText('Premi i tasti per soffiare l’acqua: hai 2 minuti', W / 2, 214);
-    ctx.fillText('per infilare almeno 5 anelli sui razzi. Inclina e scuoti il telefono!', W / 2, 242);
+    ctx.fillText(t('tag1'), W / 2, 214, W - 100);
+    ctx.fillText(t(isMobile() ? 'tagMobile' : 'tagDesk', LEVELS[curLevel].min), W / 2, 242, W - 100);
     ctx.font = '800 17px system-ui, sans-serif'; ctx.fillStyle = '#ffd23f';
-    ctx.fillText(LEVELS[curLevel].name.toUpperCase(), W / 2, 280);
+    ctx.fillText(levelName(curLevel).toUpperCase(), W / 2, 280);
     const pulse = 1 + Math.sin(performance.now() / 260) * 0.04;
     ctx.save(); ctx.translate(W / 2, 335); ctx.scale(pulse, pulse);
     ctx.fillStyle = '#ff6b5e'; rr(ctx, -120, -30, 240, 60, 30); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = '900 26px system-ui, sans-serif'; ctx.fillText('GIOCA', 0, 9);
+    ctx.fillStyle = '#fff'; ctx.font = '900 26px system-ui, sans-serif'; ctx.fillText(t('play'), 0, 9);
     ctx.restore();
   });
 
   if (state === 'end' && result) overlay(() => {
     const k = Math.min(1, endAnim / 0.5), R0 = result;
     ctx.save(); ctx.translate(W / 2, 0); ctx.scale(k, k); ctx.translate(-W / 2, 0);
-    const title = !R0.passed ? 'TEMPO SCADUTO!' : R0.done === R0.all ? 'PERFETTO!' : R0.last ? 'HAI FINITO!' : 'LIVELLO SUPERATO!';
+    const title = t(!R0.passed ? 'timeUp' : R0.done === R0.all ? 'perfect' : R0.last ? 'allDone' : 'cleared');
     ctx.fillStyle = '#fff'; ctx.font = 'italic 900 56px "Arial Black", Impact, system-ui, sans-serif';
     ctx.fillText(title, W / 2, 130, W - 120);
     if (R0.passed) for (let i = 0; i < 3; i++) star(W / 2 + (i - 1) * 78, 192 - (i === 1 ? 10 : 0), 30, i < R0.stars ? '#ffd23f' : 'rgba(255,255,255,0.2)');
     ctx.fillStyle = '#d8f4ff'; ctx.font = '700 24px system-ui, sans-serif';
-    ctx.fillText('Anelli infilati: ' + R0.done + ' / ' + R0.all + (R0.record ? '   \u00b7   nuovo record!' : ''), W / 2, R0.passed ? 262 : 210);
+    ctx.fillText(t('landed', R0.done, R0.all) + (R0.record ? '   \u00b7   ' + t('newBest') : ''), W / 2, R0.passed ? 262 : 210, W - 100);
     ctx.font = '700 19px system-ui, sans-serif';
-    if (!R0.passed) ctx.fillText('Ne servivano almeno ' + level.min + ' per passare al livello successivo', W / 2, 250);
-    else if (R0.done === R0.all) ctx.fillText('Tutti gli anelli in ' + fmt(R0.used) + '!', W / 2, 294);
-    else if (R0.last) ctx.fillText('Hai superato tutti i livelli!', W / 2, 294);
+    if (!R0.passed) ctx.fillText(t('needed', level.min), W / 2, 250, W - 100);
+    else if (R0.done === R0.all) ctx.fillText(t('allIn', fmt(R0.used)), W / 2, 294);
+    else if (R0.last) ctx.fillText(t('everyLevel'), W / 2, 294);
     for (const b of endButtons()) {
-      ctx.fillStyle = b.main ? '#ff6b5e' : 'rgba(255,255,255,0.16)'; rr(ctx, b.x, b.y, b.w, b.h, b.h / 2); ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.font = '900 23px system-ui, sans-serif'; ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 8);
+      ctx.fillStyle = b.main ? '#ff6b5e' : b.video ? '#2a9d8f' : 'rgba(255,255,255,0.16)'; rr(ctx, b.x, b.y, b.w, b.h, b.h / 2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = '900 23px system-ui, sans-serif'; ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 8, b.w - 24);
     }
     ctx.restore();
   });
 
   if (hintOpen) overlay(() => {
     ctx.fillStyle = '#fff'; ctx.font = '900 34px system-ui, sans-serif';
-    ctx.fillText('A tutto schermo su iPhone', W / 2, 120);
+    ctx.fillText(t('hintTitle'), W / 2, 120);
     ctx.font = '700 22px system-ui, sans-serif'; ctx.fillStyle = '#d8f4ff';
-    ctx.fillText('1.  In Safari tocca il tasto Condividi  \u2B06', W / 2, 185);
-    ctx.fillText('2.  Scegli “Aggiungi alla schermata Home”', W / 2, 225);
-    ctx.fillText('3.  Apri Ninni dall’icona: si gioca senza barre', W / 2, 265);
+    ctx.fillText(t('hint1'), W / 2, 185, W - 100);
+    ctx.fillText(t('hint2'), W / 2, 225, W - 100);
+    ctx.fillText(t('hint3'), W / 2, 265, W - 100);
     ctx.font = '700 17px system-ui, sans-serif'; ctx.fillStyle = 'rgba(216,244,255,0.7)';
-    ctx.fillText('Tocca per chiudere', W / 2, 340);
+    ctx.fillText(t('hintClose'), W / 2, 340);
   });
 }
 function overlay(fn) {
@@ -1070,7 +1213,7 @@ let last = 0, acc = 0;
 function frame(t) {
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t; acc += dt;
   let n = 0;
-  while (acc >= DT && n < 3) { physicsStep(); acc -= DT; n++; }
+  while (acc >= DT && n < 3) { if (!adPlaying) physicsStep(); acc -= DT; n++; }
   if (n === 3) acc = 0;
   draw();
   requestAnimationFrame(frame);
@@ -1079,10 +1222,14 @@ function frame(t) {
 resize();
 loadLevel(curLevel);
 requestAnimationFrame(frame);
+initPlatform().then(() => {
+  readSave(); reportProgress();
+  if (state === 'start') loadLevel(curLevel);
+});
 
 // per debug / test
 window.__game = { get state() { return state; }, get rings() { return rings; }, fishes, get timeLeft() { return timeLeft; }, get result() { return result; },
-  pumps, step: physicsStep, motion(o, m) { if (o) onOrient(o); if (m) onMotion(m); }, get acc() { return [accX, accY, view.flip]; }, down: pumpDown, up: pumpUp, start(i) { startLevel(i || 0); }, load: loadLevel };
+  pumps, step: physicsStep, motion(o, m) { if (o) onOrient(o); if (m) onMotion(m); }, get acc() { return [accX, accY, view.flip]; }, down: pumpDown, up: pumpUp, start(i) { startLevel(i || 0); }, load: loadLevel, get cg() { return CG; }, save, endButtons, get adPlaying() { return adPlaying; } };
 </script>
 </body>
 </html>
