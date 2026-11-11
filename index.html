@@ -105,6 +105,7 @@ try { setLang(navigator.language); } catch (e) {}
 function t(k, ...a) { const str = (STR[LANG] && STR[LANG][k]) || STR.en[k] || k; return str.replace(/\{(\d)\}/g, (_, i) => a[i]); }
 function levelName(i) { return t('level', i + 1); }
 
+const PROMO = (() => { try { return new URLSearchParams(location.search).has('promo'); } catch (e) { return false; } })();
 const COLORS = ['#ff8fc7', '#ffe14d', '#8fd0ff', '#c9a2ff'];
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const TOUCH = (navigator.maxTouchPoints || 0) > 0;
@@ -456,7 +457,7 @@ function physicsStep() {
   }
 
   if (toastT > 0) toastT -= DT;
-  if (state === 'play') {
+  if (state === 'play' && !PROMO) {
     timeLeft -= DT;
     const sec = Math.ceil(timeLeft);
     if (sec !== lastSec) { lastSec = sec; if (sec <= 10 && sec > 0) sfxTick(sec); }
@@ -914,7 +915,7 @@ function rr(c, x, y, w, h, r) {
 }
 
 function drawBackdrop() {
-  const S = 2, w = TANK.w, h = TANK.h;
+  const S = PROMO ? 5 : 2, w = TANK.w, h = TANK.h;
   backdrop.width = w * S; backdrop.height = h * S;
   const c = backdrop.getContext('2d');
   c.setTransform(S, 0, 0, S, 0, 0);
@@ -941,6 +942,7 @@ function drawBackdrop() {
   };
   weed(30, 90, '#1f9d6b'); weed(48, 60, '#27b97c'); weed(w - 28, 100, '#1f9d6b'); weed(w - 50, 66, '#27b97c');
   weed(w * 0.5 - 12, 70, '#1f9d6b'); weed(w * 0.5 + 10, 52, '#27b97c');
+  if (!PROMO) {
   // titolo
   c.save(); c.translate(w - 22, h - 62); c.textAlign = 'right';
   c.font = 'italic 900 50px "Arial Black", Impact, system-ui, sans-serif';
@@ -949,6 +951,7 @@ function drawBackdrop() {
   c.font = '800 15px system-ui, sans-serif'; c.fillStyle = '#d8f4ff';
   c.fillText('L  A  G  O  O  N', -2, 20);
   c.restore();
+  }
   // sabbia (profilo del fondo)
   g = c.createLinearGradient(0, h - 40, 0, h);
   g.addColorStop(0, '#f6dfa0'); g.addColorStop(1, '#d9b56a');
@@ -1047,12 +1050,18 @@ function draw() {
   else if (view.rot) ctx.setTransform(0, view.s * d, -view.s * d, 0, (view.vw - view.oy) * d, view.ox * d);
   else ctx.setTransform(view.s * d, 0, 0, view.s * d, view.ox * d, view.oy * d);
 
-  // scocca
-  let g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#3fd0d4'); g.addColorStop(1, '#1fa3b0');
-  ctx.fillStyle = '#0d6f7b'; rr(ctx, 2, 8, W - 4, H - 8, 58); ctx.fill();
-  ctx.fillStyle = g; rr(ctx, 2, 2, W - 4, H - 10, 58); ctx.fill();
-  ctx.fillStyle = '#10141f'; rr(ctx, TANK.x - 16, TANK.y - 16, TANK.w + 32, TANK.h + 32, 20); ctx.fill();
+  let g;
+  if (PROMO) {                        // vetrina: la vasca riempie tutta l'immagine
+    const sc = Math.max(cv.width / TANK.w, cv.height / TANK.h);
+    ctx.setTransform(sc, 0, 0, sc, cv.width / 2 - (TANK.x + TANK.w / 2) * sc, cv.height / 2 - (TANK.y + TANK.h / 2) * sc);
+  } else {
+    // scocca
+    g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#3fd0d4'); g.addColorStop(1, '#1fa3b0');
+    ctx.fillStyle = '#0d6f7b'; rr(ctx, 2, 8, W - 4, H - 8, 58); ctx.fill();
+    ctx.fillStyle = g; rr(ctx, 2, 2, W - 4, H - 10, 58); ctx.fill();
+    ctx.fillStyle = '#10141f'; rr(ctx, TANK.x - 16, TANK.y - 16, TANK.w + 32, TANK.h + 32, 20); ctx.fill();
+  }
 
   // vasca
   ctx.save();
@@ -1081,6 +1090,7 @@ function draw() {
   g.addColorStop(0, 'rgba(255,255,255,0.22)'); g.addColorStop(0.5, 'rgba(255,255,255,0.03)'); g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g; ctx.fillRect(TANK.x, TANK.y, TANK.w, TANK.h);
   ctx.restore();
+  if (PROMO) { promoTitle(); return; }
   ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 2;
   rr(ctx, TANK.x, TANK.y, TANK.w, TANK.h, 10); ctx.stroke();
 
@@ -1195,9 +1205,50 @@ function overlay(fn) {
   ctx.textAlign = 'center'; fn();
 }
 
+/* ---------------- Vetrina (copertine e video) ---------------- */
+let promoAlpha = 1, promoFrame = 0;
+function promoTitle() {
+  if (promoAlpha <= 0) return;
+  const cw = cv.width, ch = cv.height, tall = ch > cw * 0.8;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.save(); ctx.globalAlpha = promoAlpha; ctx.textAlign = 'center'; ctx.lineJoin = 'round';
+  const lines = tall ? ['HOOP', 'LAGOON'] : ['HOOP LAGOON'];
+  const size = tall ? Math.min(cw * 0.2, ch * 0.13) : Math.min(cw * 0.1, ch * 0.16);
+  ctx.font = 'italic 900 ' + size + 'px "Arial Black", Impact, system-ui, sans-serif';
+  let y = ch * (tall ? 0.16 : 0.2);
+  for (const ln of lines) {
+    ctx.shadowColor = 'rgba(0,20,60,0.45)'; ctx.shadowBlur = size * 0.25; ctx.shadowOffsetY = size * 0.06;
+    ctx.lineWidth = size * 0.16; ctx.strokeStyle = '#0b3d7a'; ctx.strokeText(ln, cw / 2, y);
+    ctx.shadowColor = 'transparent';
+    const gr = ctx.createLinearGradient(0, y - size * 0.8, 0, y);
+    gr.addColorStop(0, '#ffffff'); gr.addColorStop(1, '#bdf3ff');
+    ctx.fillStyle = gr; ctx.fillText(ln, cw / 2, y);
+    y += size * 1.02;
+  }
+  ctx.restore();
+}
+function promoStep() {               // pompe automatiche, come un giocatore
+  const f = promoFrame++;
+  if (f % 50 === 0) pumpDown(0, 'p0'); if (f % 50 === 25) pumpUp('p0');
+  if (f % 60 === 7) pumpDown(1, 'p1'); if (f % 60 === 37) pumpUp('p1');
+  physicsStep();
+}
+window.__promo = {
+  prepare(seated) {
+    loadLevel(0); state = 'play'; promoFrame = 0; promoAlpha = 1;
+    const st = seated || [0, 0];
+    let k = 0;
+    for (let pg = 0; pg < pegs.length; pg++) for (let i = 0; i < st[pg]; i++, k++) { const r = rings[k]; r.peg = pg; r.x = pegs[pg].x; r.y = pegs[pg].tipY + 20; }
+    resize();
+  },
+  run(n) { for (let i = 0; i < n; i++) promoStep(); },
+  frame(n, alpha) { for (let i = 0; i < n; i++) promoStep(); if (alpha !== undefined) promoAlpha = alpha; draw(); },
+  shot(type, q) { return cv.toDataURL(type || 'image/png', q); },
+};
+
 /* ---------------- Loop ---------------- */
 function resize() {
-  const vw = innerWidth, vh = innerHeight, dpr = Math.min(devicePixelRatio || 1, 2);
+  const vw = innerWidth, vh = innerHeight, dpr = PROMO ? 1 : Math.min(devicePixelRatio || 1, 2);
   cv.width = Math.round(vw * dpr); cv.height = Math.round(vh * dpr);
   const cs = getComputedStyle(document.documentElement), px = n => parseFloat(cs.getPropertyValue(n)) || 0;
   const padX = Math.max(px('--sl'), px('--sr')), padY = Math.max(px('--st'), px('--sb'));
@@ -1211,6 +1262,7 @@ addEventListener('orientationchange', () => setTimeout(resize, 200));
 
 let last = 0, acc = 0;
 function frame(t) {
+  if (PROMO) return;                   // in vetrina i fotogrammi li comanda lo script
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t; acc += dt;
   let n = 0;
   while (acc >= DT && n < 3) { if (!adPlaying) physicsStep(); acc -= DT; n++; }
