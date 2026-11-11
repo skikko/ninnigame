@@ -107,6 +107,10 @@ function levelName(i) { return t('level', i + 1); }
 
 const PROMO = (() => { try { return new URLSearchParams(location.search).has('promo'); } catch (e) { return false; } })();
 const COLORS = ['#ff8fc7', '#ffe14d', '#8fd0ff', '#c9a2ff'];
+// Fissati dallo script di build (tools/build.mjs). 'auto' = sorgente e GitHub Pages:
+// l'SDK CrazyGames si attiva solo quando il gioco gira davvero su CrazyGames.
+const PLATFORM = 'auto';               // auto | crazygames | gamedistribution | none
+const GD_GAME_ID = '';                 // id del gioco nel pannello GameDistribution
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const TOUCH = (navigator.maxTouchPoints || 0) > 0;
 
@@ -118,7 +122,7 @@ let view = { s: 1, ox: 0, oy: 0, rot: false, vw: 1, vh: 1, dpr: 1, flip: false }
 let level, pegs, nozzles, rings, bubbles;
 let state = 'start';              // start | play | end
 let curLevel = 0, unlocked = 0, timeLeft = TIME_LIMIT, lastSec = 0, winHold = 0, endAnim = 0, result = null;
-let toastText = '', toastT = 0, hintOpen = false, pendingFs = 0;
+let toastText = '', toastT = 0, hintOpen = false, pendingFs = 0, pendingAct = null;
 let adPlaying = false, continueUsed = false, runOffered = false, rewardBroken = false;
 // Progressi: su CrazyGames solo nel loro Data module (obbligatorio), altrove in localStorage.
 const SAVE_KEY = 'hooplagoon_save';
@@ -588,10 +592,15 @@ function endButtons() {
   return [{ ...retry, x: W / 2 - 270, y, w: 250, h }, { ...next, x: W / 2 + 20, y, w: 250, h, main: true }];
 }
 
-/* ---------------- CrazyGames SDK ---------------- */
-// Tutto passa da qui: fuori da CrazyGames (es. GitHub Pages) CG.ok resta false e il gioco funziona da solo.
+/* ---------------- Portali: CrazyGames e GameDistribution ---------------- */
+// Il gioco chiama solo le funzioni qui sotto; ognuna sa cosa fare sul portale in cui gira.
+// Fuori dai portali (GitHub Pages, itch.io) non c'\u00e8 pubblicit\u00e0 e il gioco funziona da solo.
 const CG = { ok: false, sdk: null, env: 'none', adblock: false, mute: false, device: null };
+const GD = { ok: false, paused: false, rewarded: false };
+let PLAT = 'none';                      // portale effettivamente attivo
 async function initPlatform() {
+  if (PLATFORM === 'gamedistribution') { await initGD(); return; }
+  if (PLATFORM === 'none') return;
   try {
     const S = window.CrazyGames && window.CrazyGames.SDK;
     if (!S) return;
@@ -600,36 +609,68 @@ async function initPlatform() {
     if (!ready) return;
     CG.env = S.environment;
     if (CG.env !== 'crazygames' && CG.env !== 'local') return;
-    CG.sdk = S; CG.ok = true;
+    CG.sdk = S; CG.ok = true; PLAT = 'crazygames';
     try { S.game.loadingStart(); } catch (e) {}
     try { const si = S.user.systemInfo; if (si) { if (si.locale) setLang(si.locale); if (si.device) CG.device = si.device.type; } } catch (e) {}
     try { CG.mute = !!S.game.settings.muteAudio; S.game.addSettingsChangeListener(st => { CG.mute = !!st.muteAudio; }); } catch (e) {}
     try { CG.adblock = await S.ad.hasAdblock(); } catch (e) {}
     try { S.game.loadingStop(); } catch (e) {}
-  } catch (e) { CG.ok = false; }
+  } catch (e) { CG.ok = false; PLAT = 'none'; }
+}
+// GameDistribution: SDK caricato una sola volta all'avvio; pausa e muto li comanda lui con gli eventi
+function initGD() {
+  return new Promise(resolve => {
+    let settled = false;
+    const fin = () => { if (!settled) { settled = true; resolve(); } };
+    if (!GD_GAME_ID) { fin(); return; }
+    window.GD_OPTIONS = {
+      gameId: GD_GAME_ID,
+      onEvent: ev => {
+        switch (ev.name) {
+          case 'SDK_READY': GD.ok = true; PLAT = 'gamedistribution'; fin(); break;
+          case 'SDK_ERROR': fin(); break;
+          case 'SDK_GAME_PAUSE': GD.paused = true; adAudio(true); break;
+          case 'SDK_GAME_START': GD.paused = false; adAudio(false); break;
+          case 'SDK_REWARDED_WATCH_COMPLETE': GD.rewarded = true; break;
+        }
+      },
+    };
+    const js = document.createElement('script');
+    js.id = 'gamedistribution-jssdk'; js.src = 'https://html5.api.gamedistribution.com/main.min.js';
+    js.onerror = fin; document.head.appendChild(js);
+    setTimeout(fin, 5000);
+  });
 }
 let gpOn = false;
 function gameplay(on) {
-  if (!CG.ok || gpOn === on) return;
+  if (PLAT !== 'crazygames' || gpOn === on) return;
   gpOn = on;
   try { if (on) CG.sdk.game.gameplayStart(); else CG.sdk.game.gameplayStop(); } catch (e) {}
 }
 function reportProgress() {
-  if (!CG.ok) return;
+  if (PLAT !== 'crazygames') return;
   let n = 0; for (let i = 0; i < LEVELS.length; i++) if (save.passed[i]) n++;
   try { CG.sdk.game.reportGameCompletedPercentage(Math.round(n / LEVELS.length * 100)); } catch (e) {}
 }
-function adsReady() { return CG.ok && !CG.adblock; }
+function adsReady() {
+  if (PLAT === 'crazygames') return !CG.adblock;
+  if (PLAT === 'gamedistribution') return GD.ok && !!window.gdsdk;
+  return false;
+}
 function adAudio(off) {                 // il gioco deve tacere durante il video
   if (!ac) return;
   try { if (off) ac.suspend(); else ac.resume(); } catch (e) {}
 }
-// pubblicit\u00e0 fra un livello e l'altro (la frequenza la decide CrazyGames)
+function paused() { return adPlaying || GD.paused; }
+// pubblicit\u00e0 fra un livello e l'altro (la frequenza la decide il portale)
 function withMidgame(next) {
   if (!adsReady()) { next(); return; }
   adPlaying = true;
   const done = () => { if (!adPlaying) return; adPlaying = false; adAudio(false); next(); };
-  try { CG.sdk.ad.requestAd('midgame', { adStarted: () => adAudio(true), adFinished: done, adError: done }); } catch (e) { done(); }
+  try {
+    if (PLAT === 'gamedistribution') Promise.resolve(window.gdsdk.showAd()).then(done, done);
+    else CG.sdk.ad.requestAd('midgame', { adStarted: () => adAudio(true), adFinished: done, adError: done });
+  } catch (e) { done(); }
 }
 // video facoltativo che regala 30 secondi
 function showRewarded() {
@@ -640,11 +681,26 @@ function showRewarded() {
     if (settled) return; settled = true; adPlaying = false; adAudio(false);
     if (ok) continueLevel(); else { rewardBroken = true; toast(t('adFail'), 2.5); }
   };
-  try { CG.sdk.ad.requestAd('rewarded', { adStarted: () => adAudio(true), adFinished: () => finish(true), adError: () => finish(false) }); }
-  catch (e) { finish(false); }
+  try {
+    if (PLAT === 'gamedistribution') {
+      GD.rewarded = false;           // il premio vale solo se arriva SDK_REWARDED_WATCH_COMPLETE
+      window.gdsdk.showAd('rewarded').then(() => finish(GD.rewarded), () => finish(false));
+    } else {
+      CG.sdk.ad.requestAd('rewarded', { adStarted: () => adAudio(true), adFinished: () => finish(true), adError: () => finish(false) });
+    }
+  } catch (e) { finish(false); }
+}
+// dal menu iniziale: su GameDistribution \u00e8 richiesta una pubblicit\u00e0 prima di giocare
+function startFromMenu() {
+  if (PLAT === 'gamedistribution') withMidgame(() => startLevel(curLevel)); else startLevel(curLevel);
 }
 function isMobile() { return CG.device ? CG.device !== 'desktop' : TOUCH; }
-function fsAllowed() { return !CG.ok; }   // su CrazyGames lo schermo intero lo d\u00e0 il sito: vietato il nostro pulsante
+// su CrazyGames lo schermo intero lo d\u00e0 il sito (vietato il nostro pulsante); dentro altri siti
+// lo mostriamo solo dove il browser lo permette davvero
+function fsAllowed() {
+  if (PLATFORM === 'crazygames' || PLAT === 'crazygames') return false;
+  return PLATFORM === 'auto' || canFullscreen();
+}
 
 /* ---------------- Input ---------------- */
 function toLogical(e) {
@@ -687,14 +743,14 @@ function pumpUp(id) {
 
 cv.addEventListener('pointerdown', e => {
   e.preventDefault();
-  if (adPlaying) return;
+  if (paused()) return;
   initAudio();
   const p = toLogical(e);
   if (hintOpen) { hintOpen = false; return; }
-  if (state === 'start') { if (fsAllowed() && canFullscreen() && !fsElement()) pendingFs = 1; startLevel(curLevel); return; }
+  if (state === 'start') { if (fsAllowed() && canFullscreen() && !fsElement()) pendingFs = 1; pendingAct = startFromMenu; return; }
   if (fsAllowed() && hit(BTN_FULL, p)) { pendingFs = 2; if (!canFullscreen()) toggleFullscreen(false); return; }
   if (state === 'end') {
-    if (endAnim > 0.8) for (const b of endButtons()) if (p.x > b.x && p.x < b.x + b.w && p.y > b.y && p.y < b.y + b.h) { b.act(); break; }
+    if (endAnim > 0.8) for (const b of endButtons()) if (p.x > b.x && p.x < b.x + b.w && p.y > b.y && p.y < b.y + b.h) { pendingAct = b.act; break; }
     return;
   }
   if (hit(BTN_SOUND, p)) { soundOn = !soundOn; return; }
@@ -711,11 +767,11 @@ document.addEventListener('touchmove', e => e.preventDefault(), { passive: false
 const KEYS = { ArrowLeft: 0, KeyA: 0, ArrowRight: 1, KeyD: 1, KeyL: 1 };   // per posizione del tasto: va bene anche su AZERTY
 addEventListener('keydown', e => {
   if (e.code in KEYS || e.code === 'Space') e.preventDefault();
-  if (e.repeat || adPlaying) return;
+  if (e.repeat || paused()) return;
   initAudio();
   if (hintOpen) { hintOpen = false; return; }
-  if (state === 'start') { startLevel(curLevel); return; }
-  if (state === 'end') { if (endAnim > 0.8 && (e.key === 'Enter' || e.key === ' ')) { const m = endButtons().find(b => b.main); if (m) m.act(); } return; }
+  if (state === 'start') { pendingAct = startFromMenu; return; }
+  if (state === 'end') { if (endAnim > 0.8 && (e.key === 'Enter' || e.key === ' ')) { const m = endButtons().find(b => b.main); if (m) pendingAct = m.act; } return; }
   if (e.code in KEYS) pumpDown(KEYS[e.code], 'k' + e.code);
   if (e.code === 'KeyR') startLevel(curLevel);
   if (e.code === 'KeyF' && fsAllowed()) toggleFullscreen(false);
@@ -751,7 +807,9 @@ function onGesture() {
   if (ac && ac.state === 'suspended' && !adPlaying) { try { ac.resume(); } catch (e) {} }   // iPhone: l'audio riparte solo da un tocco
   if (sensorState === 'off' && isMobile()) startSensors();
   if (pendingFs) { const m = pendingFs; pendingFs = 0; toggleFullscreen(m === 1); }
+  if (pendingAct && !paused()) { const a = pendingAct; pendingAct = null; a(); }
 }
+cv.addEventListener('pointerup', onGesture);
 document.addEventListener('touchend', onGesture, { passive: true });
 document.addEventListener('click', onGesture);
 addEventListener('keyup', onGesture);
@@ -847,7 +905,7 @@ function toggleTilt() {
 
 /* ---------------- Audio ---------------- */
 let ac = null, noiseBuf = null;
-function audioOn() { return soundOn && !CG.mute && !adPlaying; }
+function audioOn() { return soundOn && !CG.mute && !paused(); }
 function initAudio() {
   if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
   try {
@@ -1265,7 +1323,7 @@ function frame(t) {
   if (PROMO) return;                   // in vetrina i fotogrammi li comanda lo script
   const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t; acc += dt;
   let n = 0;
-  while (acc >= DT && n < 3) { if (!adPlaying) physicsStep(); acc -= DT; n++; }
+  while (acc >= DT && n < 3) { if (!paused()) physicsStep(); acc -= DT; n++; }
   if (n === 3) acc = 0;
   draw();
   requestAnimationFrame(frame);
@@ -1281,7 +1339,7 @@ initPlatform().then(() => {
 
 // per debug / test
 window.__game = { get state() { return state; }, get rings() { return rings; }, fishes, get timeLeft() { return timeLeft; }, get result() { return result; },
-  pumps, step: physicsStep, motion(o, m) { if (o) onOrient(o); if (m) onMotion(m); }, get acc() { return [accX, accY, view.flip]; }, down: pumpDown, up: pumpUp, start(i) { startLevel(i || 0); }, load: loadLevel, get cg() { return CG; }, save, endButtons, get adPlaying() { return adPlaying; } };
+  pumps, step: physicsStep, motion(o, m) { if (o) onOrient(o); if (m) onMotion(m); }, get acc() { return [accX, accY, view.flip]; }, down: pumpDown, up: pumpUp, start(i) { startLevel(i || 0); }, load: loadLevel, get cg() { return CG; }, get plat() { return PLAT; }, get gd() { return GD; }, gesture: onGesture, save, endButtons, get adPlaying() { return adPlaying; } };
 </script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 // Crea copertine e video per CrazyGames usando la modalità vetrina del gioco (?promo=1).
-// Uso: node tools/promo.mjs <url del gioco> <cartella di uscita>
+// Uso: node tools/promo.mjs <url del gioco> <cartella di uscita> [misure, es. 630x500,512x384]
 // Richiede Google Chrome e ffmpeg installati.
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
@@ -78,6 +78,12 @@ async function video(name, w, h, seconds) {
 try {
   await connect();
   await cdp('Page.enable'); await cdp('Runtime.enable');
+  // solo copertine nelle misure indicate, es: node tools/promo.mjs <url> <cartella> 630x500,512x384
+  const only = process.argv[4];
+  if (only) {
+    for (const sz of only.split(',')) { const [w, h] = sz.split('x').map(Number); await cover(`cover-${w}x${h}.png`, w, h); }
+    process.exit(0);
+  }
   await cover('cover-landscape-1920x1080.png', 1920, 1080);
   await cover('cover-portrait-800x1200.png', 800, 1200);
   await cover('cover-square-800x800.png', 800, 800);
